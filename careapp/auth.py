@@ -1,6 +1,7 @@
 """登录、会话与鉴权。"""
 import functools
 import secrets
+from datetime import datetime
 
 from flask import Blueprint, g, jsonify, request
 from werkzeug.security import check_password_hash
@@ -24,8 +25,8 @@ def login():
     if not row['active']:
         return jsonify(error='账号已停用，请联系管理员'), 403
     token = secrets.token_hex(32)
-    db.execute('INSERT INTO sessions(token,user_id,created_at) VALUES(?,?,datetime("now","localtime"))',
-               (token, row['id']))
+    db.execute('INSERT INTO sessions(token,user_id,created_at) VALUES(?,?,?)',
+               (token, row['id'], datetime.now().strftime('%Y-%m-%d %H:%M')))
     db.commit()
     return jsonify(token=token, role=row['role'], name=row['name'], id=row['id'])
 

@@ -8,7 +8,7 @@ from flask import Blueprint, g, jsonify, request, Response
 from werkzeug.security import generate_password_hash
 
 from .auth import auth_required
-from .db import get_db
+from .db import get_db, insert_returning_id
 from . import amap, services
 from flask import current_app
 
@@ -76,12 +76,13 @@ def create_user():
     if p['worker_id'] and not db.execute(
             "SELECT 1 FROM users WHERE id=? AND role='worker'", (p['worker_id'],)).fetchone():
         return jsonify(error='所指派的服务员不存在'), 400
-    db.execute('INSERT INTO users(phone,password_hash,role,name,address,lat,lng,worker_id,created_at) '
-               'VALUES(?,?,?,?,?,?,?,?,?)',
-               (p['phone'], generate_password_hash(p['password']), d['role'], p['name'],
-                p['address'], p['lat'], p['lng'], p['worker_id'], services.now_str()))
+    uid = insert_returning_id(
+        db, 'INSERT INTO users(phone,password_hash,role,name,address,lat,lng,worker_id,created_at) '
+            'VALUES(?,?,?,?,?,?,?,?,?)',
+        (p['phone'], generate_password_hash(p['password']), d['role'], p['name'],
+         p['address'], p['lat'], p['lng'], p['worker_id'], services.now_str()))
     db.commit()
-    return jsonify(ok=True, id=db.execute('SELECT last_insert_rowid()').fetchone()[0])
+    return jsonify(ok=True, id=uid)
 
 
 @bp.put('/users/<int:uid>')
@@ -485,10 +486,10 @@ def payout():
     if not rows:
         return jsonify(error='该时间段没有待发放的酬金订单'), 400
     total = sum(r['worker_pay_cents'] for r in rows)
-    db.execute('INSERT INTO payouts(worker_id,from_date,to_date,total_cents,order_count,created_at) '
-               'VALUES(?,?,?,?,?,?)',
-               (w['id'], d['from'], d['to'], total, len(rows), services.now_str()))
-    pid = db.execute('SELECT last_insert_rowid()').fetchone()[0]
+    pid = insert_returning_id(
+        db, 'INSERT INTO payouts(worker_id,from_date,to_date,total_cents,order_count,created_at) '
+            'VALUES(?,?,?,?,?,?)',
+        (w['id'], d['from'], d['to'], total, len(rows), services.now_str()))
     db.execute('UPDATE orders SET payout_id=? WHERE id IN '
                f'({",".join(str(r["id"]) for r in rows)})', (pid,))
     for r in rows:

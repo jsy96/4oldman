@@ -5,3 +5,5 @@ __pycache__/
 server.log
 *.db
 secrets.json
+scf_bundle.zip
+build_scf/

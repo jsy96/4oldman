@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 
 from flask import current_app
 
-from .db import get_db
+from .db import get_db, insert_returning_id
 
 
 def now_str():
@@ -67,13 +67,13 @@ def create_order(customer, worker, item, start_dt, note, actor):
     db = get_db()
     price, pay = item['price_cents'], item['worker_pay_cents']
     end_dt = start_dt + timedelta(minutes=item['minutes'])
-    db.execute(
+    oid = insert_returning_id(
+        db,
         'INSERT INTO orders(customer_id,worker_id,item_id,sched_start,sched_end,status,'
         'price_cents,worker_pay_cents,note,created_at,updated_at) '
         "VALUES(?,?,?,?,?, 'pending',?,?,?,?,?)",
         (customer['id'], worker['id'], item['id'], start_dt.strftime('%Y-%m-%d %H:%M'),
          end_dt.strftime('%Y-%m-%d %H:%M'), price, pay, note or '', now_str(), now_str()))
-    oid = db.execute('SELECT last_insert_rowid()').fetchone()[0]
     log_order(oid, actor, '下单', f'{customer["name"]} 预约 {item["name"]} '
                 f'{start_dt.strftime("%Y-%m-%d %H:%M")}，服务员 {worker["name"]}')
     return oid
