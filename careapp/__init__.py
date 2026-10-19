@@ -7,7 +7,7 @@ from .db import BASE, close_db, init_db, load_config
 
 WEB_DIR = os.path.join(BASE, 'web')
 
-APP_VERSION = 'v1.0.261019-4'
+APP_VERSION = 'v1.0.261019-5'
 
 
 def create_app():

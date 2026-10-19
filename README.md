@@ -4,6 +4,7 @@
 
 ## 更新记录
 
+- **2026-10-19　v1.0.261019-5**　新增 `deploy_scf.py` **一键部署到腾讯云函数**（本机直连腾讯云 API：创建/更新 Web 函数、注入环境变量、绑定 VPC、自动建 API 网关触发器），密钥放 `secrets.json`（`tencent_secret_id/key`，git 忽略）。注意：本应用为 SQL 数据库（MySQL），**自动建表，无需云开发的「集合」**。
 - **2026-10-19　v1.0.261019-4**　数据库层升级为**三模式**：本地 SQLite / **腾讯云 MySQL（云函数部署推荐）** / PostgreSQL（Supabase 等），配置 `database_url` 即自动切换，业务 SQL 三库通用。新增 `pack_scf.py` 一键打包**腾讯云函数 SCF Web 函数**部署包（交叉安装 Linux x86_64 依赖）；`server.py` 自动适配平台注入的 PORT。README 新增腾讯云部署完整步骤。
 - **2026-10-19　v1.0.261019-3**　接入**高德开放平台**（可选）：配置 Web服务 Key 后，① 管理员人员编辑支持「根据地址自动定位」；② 服务员行程路线的距离与耗时改用**高德骑行路网实测**（恶劣天气仍自动放大耗时）。Key 存放于 `secrets.json`（git 已忽略）或环境变量 `AMAP_KEY`，未配置时自动退回直线估算/手动点图，功能不受影响。新增云数据库选型建议。
 - **2026-10-19　v1.0.261019-2**　地图默认中心改为**武汉**（30.5928, 114.3055），演示数据地址全部换为武汉街道（江汉/武昌/江岸/硚口/洪山/青山）；启动脚本更名为 `start.bat`（原 run.bat 移除）；新增「部署说明」章节（Vercel/Cloudflare 适配性结论与可行方案）；接入 GitHub 远程仓库。
@@ -134,6 +135,19 @@ uv pip install --python .venv/Scripts/python.exe -r requirements.txt
 
 ### 腾讯云函数 SCF 部署（推荐组合：SCF Web 函数 + 腾讯云 MySQL）
 
+**方式一：一键部署（推荐，2 条命令）**
+
+```bash
+# 1. 打包（生成 scf_bundle.zip）
+.venv/Scripts/python.exe pack_scf.py
+# 2. 部署（创建/更新函数+环境变量+VPC+触发器）
+.venv/Scripts/python.exe deploy_scf.py --region ap-guangzhou --vpc-id vpc-xxx --subnet-id subnet-xxx
+```
+
+前提：`secrets.json` 已填 `tencent_secret_id` / `tencent_secret_key`（控制台 → 右上角头像 → 访问管理 → API 密钥管理 → 新建密钥，只放本文件不入 git）、`database_url`、`amap_key`。函数已存在时自动改为更新模式；触发器自动创建失败时会提示控制台手动路径。
+
+**方式二：控制台手点（6 步）**
+
 1. **建库**：控制台 → 云数据库 MySQL（基础版即可，与函数同地域如广州/上海）→ 初始化账号和库（如 `oldcare`）。内网地址形如 `10.0.x.x:3306`
 2. **打包**：本机执行 `.venv\Scripts\python.exe pack_scf.py` → 生成 `scf_bundle.zip`（含 Linux x86_64 依赖，按 Python 3.9 打包，**函数运行时要选 Python 3.9**）
 3. **建函数**：控制台 → 云函数 SCF → 新建 → **Web 函数** → 代码本地上传 zip → 启动命令 `python server.py`
@@ -142,7 +156,8 @@ uv pip install --python .venv/Scripts/python.exe -r requirements.txt
    - `DATABASE_URL` = `mysql://账号:密码@10.0.x.x:3306/oldcare`（密码含特殊字符需 URL 编码）
    - `AMAP_KEY` = 高德 Key（可选）
 6. **访问**：函数「触发管理 → API 网关触发器」得到默认 URL（无需备案域名；自定义域名需备案）。首次冷启动约 2-5 秒，之后毫秒级
-7. 首次访问自动建表并写入演示数据，登录后**立即改密码、清理演示数据**
+
+> 说明：本应用是 SQL 数据库，**首次访问自动建表并写入演示数据，无需手动建表，也不使用云开发的文档「集合」**。MySQL 实例购买需在控制台完成（涉及付费，不建议脚本代建）。上线后登录改掉所有演示账号密码。
 
 SCF 计费参考：免费额度（云函数每月 100 万次调用 + 40000 GBs 资源）对单店使用量绰绰有余；MySQL 基础型约 30-80 元/月，是本方案主要成本。
 
