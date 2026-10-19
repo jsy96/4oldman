@@ -4,6 +4,7 @@
 
 ## 更新记录
 
+- **2026-10-19　v1.0.261019-2**　地图默认中心改为**武汉**（30.5928, 114.3055），演示数据地址全部换为武汉街道（江汉/武昌/江岸/硚口/洪山/青山）；启动脚本更名为 `start.bat`（原 run.bat 移除）；新增「部署说明」章节（Vercel/Cloudflare 适配性结论与可行方案）；接入 GitHub 远程仓库。
 - **2026-10-19　v1.0.261019-1**　初始版本。三角色登录与界面；顾客预约（冲突智能提醒+空闲时段建议）、账户余额与明细；服务员待办确认/完成/异常上报、订单查询、AI 行程路线（地理排序、天气降速、午餐预留、电瓶车电量预估）、一键电话/短信；管理员人员/项目管理、订单管理（改期/改派/异常处理/取消退款）、多维统计与 CSV 导出、批量月度充值、按完成订单发放酬金。后端冒烟测试 30 项全部通过。
 
 ## 功能总览
@@ -60,7 +61,7 @@
 ```
 4oldman/
 ├── server.py              # 入口：python server.py → http://127.0.0.1:8000
-├── run.bat                # 一键启动（自动用 uv 建 .venv）
+├── start.bat              # 一键启动（自动用 uv 建 .venv）
 ├── config.json            # 配置：地图中心/底图、工作时间、午餐、车速、电量模型等
 ├── requirements.txt       # flask、requests
 ├── careapp/               # 后端包
@@ -88,7 +89,7 @@
 uv venv .venv
 uv pip install --python .venv/Scripts/python.exe -r requirements.txt
 
-# 启动（或直接双击 run.bat）
+# 启动（或直接双击 start.bat）
 .venv/Scripts/python.exe server.py
 # 浏览器自动打开 http://127.0.0.1:8000
 ```
@@ -107,7 +108,29 @@ uv pip install --python .venv/Scripts/python.exe -r requirements.txt
 
 ## 配置说明（config.json）
 
-- `map.center_*`：地图默认中心与缩放（默认上海人民广场）；`map.tiles`：`gaode`（中国）或 `osm`（海外）。**切换城市时改这三项，并重新给人员选点定位**
+- `map.center_*`：地图默认中心与缩放（默认**武汉** 30.5928, 114.3055）；`map.tiles`：`gaode`（中国）或 `osm`（海外）。**切换城市时改这三项，并重新给人员选点定位**
+
+## 部署说明（Vercel / Cloudflare 适配性）
+
+**结论：本应用不能直接部署到 Vercel 或 Cloudflare。** 原因：
+
+- 应用是 **Flask 常驻服务 + SQLite 本地文件**，所有订单/账户数据写在本机 `data/care.db`
+- Vercel 的 Python Serverless 函数**文件系统不持久**（每次调用即弃、可能多实例），SQLite 数据会丢失且互相不一致
+- Cloudflare Workers/Pages **不支持 Flask 常驻 Python 应用**（Pages 仅静态资源）
+
+**可行的公网部署方案（按省事程度排序）：**
+
+| 方案 | 改动量 | 说明 |
+|------|--------|------|
+| 局域网直连（现状） | 无 | 手机连同一 WiFi 访问 `http://电脑IP:8000`，最简单 |
+| 内网穿透 | 无 | 本机跑 cpolar / frp / 花生壳，把 8000 端口映射出去；注意设强密码 |
+| VPS 部署 | 无 | 任意云服务器（宝塔/1panel）装 uv 后直接 `python server.py`，配 Nginx + HTTPS |
+| Fly.io / Railway / Render | 极小 | 免费容器平台，挂持久卷（volume）即可保住 SQLite，代码不用改 |
+| 强行上 Vercel/CF | 大 | 需换云数据库（Neon Postgres / CF D1）并重写数据层，前端静态部分可放 CF Pages——不推荐 |
+
+公网部署安全清单：① 全员改强密码；② 套 HTTPS（拨号/短信链接在 http 下部分手机浏览器会拦截）；③ 不要把管理端地址公开传播。
+
+## 测试
 - `lunch`：午餐预留时段（默认 11:30-12:30，路线自动避开）
 - `speed_kmh`：电瓶车晴天 15 / 雨天 12 / 雪天 10 km/h；`road_factor`：直线距离→实际路系数 1.35
 - `battery`：电量模型（48V20Ah=960Wh 基准，气温低于 22℃ 每 1℃ 每公里 +0.7Wh）

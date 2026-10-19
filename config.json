@@ -4,9 +4,9 @@
   "port": 8000,
   "open_browser": true,
   "map": {
-    "center_name": "上海",
-    "center_lat": 31.2304,
-    "center_lng": 121.4737,
+    "center_name": "武汉",
+    "center_lat": 30.5928,
+    "center_lng": 114.3055,
     "zoom": 12,
     "tiles": "gaode"
   },
