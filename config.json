@@ -1,0 +1,25 @@
+{
+  "app_name": "颐养通",
+  "app_sub": "居家养老服务管理平台",
+  "port": 8000,
+  "open_browser": true,
+  "map": {
+    "center_name": "上海",
+    "center_lat": 31.2304,
+    "center_lng": 121.4737,
+    "zoom": 12,
+    "tiles": "gaode"
+  },
+  "work_hours": { "start": "08:00", "end": "17:30" },
+  "day_start": "08:30",
+  "lunch": { "start": "11:30", "end": "12:30" },
+  "speed_kmh": { "dry": 15, "rain": 12, "snow": 10 },
+  "road_factor": 1.35,
+  "conflict_buffer_min": 30,
+  "battery": {
+    "capacity_wh": 960,
+    "wh_per_km_base": 16,
+    "temp_ref_c": 22,
+    "wh_per_km_per_degree": 0.7
+  }
+}
