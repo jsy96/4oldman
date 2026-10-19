@@ -189,6 +189,7 @@ const Worker = {
         <div class="card">
           <h3>路线总览</h3>
           <div>总里程 <b>${plan.total_km} km</b> · 服务 <b>${plan.stops.length}</b> 单</div>
+          <div class="muted small">距离来源：${esc(plan.distance_source || '直线×1.35估算')}</div>
           <div class="muted small">午餐预留 ${esc(plan.lunch.start)}-${esc(plan.lunch.end)}${plan.lunch.used ? '（已自动避开）' : ''}</div>
           ${plan.warnings.length ? `<div class="warn-box">${plan.warnings.map(esc).join('<br>')}</div>` : ''}
         </div>

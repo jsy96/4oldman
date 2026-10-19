@@ -322,7 +322,9 @@ const Admin = {
       <label class="fl">${isNew ? '初始密码' : '重置密码（留空不改）'}</label>
       <input type="text" id="uf-pwd" placeholder="至少 6 位" ${u ? 'value=""' : ''}>
       <label class="fl">居住地址</label>
-      <input type="text" id="uf-addr" value="${u ? esc(u.address) : ''}">
+      <input type="text" id="uf-addr" value="${u ? esc(u.address) : ''}" placeholder="例：江汉区解放大道690号">
+      <button type="button" class="btn btn-ghost btn-small" id="uf-geo" style="margin-top:6px">📍 根据地址自动定位</button>
+      <span class="muted small" style="margin-left:8px">或直接点击下方地图选点</span>
       ${role === 'customer' ? `
       <label class="fl">指派服务员</label>
       <select id="uf-worker">${this.cache.workers.filter(w => w.active)
@@ -362,6 +364,20 @@ const Admin = {
             else marker = L.marker(pos, { icon: Maps.pin('📍') }).addTo(map);
             box.querySelector('#uf-pos').textContent = `已定位：${pos[0].toFixed(5)}, ${pos[1].toFixed(5)}`;
           });
+          box.querySelector('#uf-geo').onclick = async () => {
+            const addr = box.querySelector('#uf-addr').value.trim();
+            if (!addr) { toast('请先填写地址'); return; }
+            toast('正在解析地址…');
+            try {
+              const g = await API.call(`/api/a/geocode?address=${encodeURIComponent(addr)}`);
+              pos = [g.lat, g.lng];
+              map.setView(pos, 16);
+              if (marker) marker.setLatLng(pos);
+              else marker = L.marker(pos, { icon: Maps.pin('📍') }).addTo(map);
+              box.querySelector('#uf-pos').textContent = `已定位：${pos[0].toFixed(5)}, ${pos[1].toFixed(5)}（高德解析）`;
+              Maps.refresh();
+            } catch (e) { toast(e.message); }
+          };
           Maps.refresh();
         }, 80);
       },

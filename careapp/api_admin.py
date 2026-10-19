@@ -9,7 +9,8 @@ from werkzeug.security import generate_password_hash
 
 from .auth import auth_required
 from .db import get_db
-from . import services
+from . import amap, services
+from flask import current_app
 
 bp = Blueprint('admin', __name__, url_prefix='/api/a')
 
@@ -132,6 +133,24 @@ def deactivate_user(uid):
     db.execute('UPDATE users SET active=0 WHERE id=?', (uid,))
     db.commit()
     return jsonify(ok=True)
+
+
+# ---------- 高德地址定位 ----------
+
+@bp.get('/geocode')
+@auth_required('admin')
+def geocode():
+    """地址 -> 坐标（需配置高德 Key；未配置则提示手动点图）。"""
+    addr = (request.args.get('address') or '').strip()
+    if not addr:
+        return jsonify(error='请先填写地址'), 400
+    if not amap.get_key():
+        return jsonify(error='未配置高德 Key（secrets.json），请手动点击地图选点'), 400
+    city = request.args.get('city') or current_app.config['APP_CONF']['map'].get('center_name', '')
+    r = amap.geocode(addr, city)
+    if not r:
+        return jsonify(error='该地址未能解析出坐标，请补充城市/路名或手动点图'), 400
+    return jsonify(lat=r[0], lng=r[1])
 
 
 # ---------- 服务项目 ----------

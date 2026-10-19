@@ -1,9 +1,11 @@
-"""行程规划：TSP 排序、电瓶车耗时/电量估算、Open-Meteo 天气。"""
+"""行程规划：TSP 排序、电瓶车耗时/电量估算、Open-Meteo 天气、高德骑行路网。"""
 import math
 from datetime import datetime, timedelta
 
 import requests
 from flask import current_app
+
+from . import amap
 
 WMO_TEXT = {0: '晴', 1: '基本晴', 2: '多云', 3: '阴', 45: '雾', 48: '雾凇',
             51: '小毛雨', 53: '毛雨', 55: '大毛雨', 56: '冻毛雨', 57: '冻毛雨',
@@ -140,14 +142,21 @@ def plan_route(worker, orders, conf, date_str):
     lunch_e = d.replace(hour=le_h, minute=le_m)
 
     factor, total_km = conf['road_factor'], 0.0
+    weather_factor = speeds['dry'] / speed if speed < speeds['dry'] else 1.0  # 恶劣天气放大耗时
     seq = _tsp_order(start, pts)
     prev, lunch_used = start, False
+    amap_legs = 0
     markers = [dict(lat=start[0], lng=start[1], seq='🏠', home=True, customer=start_name)]
     for k, idx in enumerate(seq):
         o = valid[idx]
         km = haversine_km(prev, pts[idx]) * factor
-        total_km += km
         leg_min = max(5, math.ceil(km / speed * 60))
+        ride = amap.bicycling(prev, pts[idx])  # 高德骑行路网（配了 Key 才有，GCJ-02 一致）
+        if ride:
+            km = ride[0] / 1000
+            leg_min = max(3, round(ride[1] / 60 * weather_factor))
+            amap_legs += 1
+        total_km += km
         arrive = clock + timedelta(minutes=leg_min)
         sched = datetime.strptime(o['sched_start'], '%Y-%m-%d %H:%M')
         svc_start = max(arrive, sched)
@@ -189,6 +198,9 @@ def plan_route(worker, orders, conf, date_str):
 
     return dict(date=date_str, start_name=start_name, start=start, stops=stops_out, legs=legs,
                 markers=markers,
+                distance_source=('高德骑行实测' if amap_legs == len(seq) and amap_legs
+                                 else f'高德骑行/直线混合({amap_legs}/{len(seq)})' if amap_legs
+                                 else '直线×1.35估算'),
                 total_km=round(total_km, 2), work_minutes=work_minutes,
                 lunch=dict(start=conf['lunch']['start'], end=conf['lunch']['end'], used=lunch_used),
                 weather=weather, weather_note=weather_note, battery=battery, warnings=warnings)
