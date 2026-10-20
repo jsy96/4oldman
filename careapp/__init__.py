@@ -7,7 +7,7 @@ from .db import BASE, close_db, init_db, load_config
 
 WEB_DIR = os.path.join(BASE, 'web')
 
-APP_VERSION = 'v1.0.261020-10'
+APP_VERSION = 'v1.0.261020-12'
 
 
 def create_app():
@@ -77,6 +77,8 @@ def create_app():
 
     @app.get('/<path:p>')
     def assets(p):
-        return send_from_directory(WEB_DIR, p)
+        resp = send_from_directory(WEB_DIR, p)
+        resp.headers['Cache-Control'] = 'no-cache'  # CDN 每次回源校验，发版即生效
+        return resp
 
     return app
