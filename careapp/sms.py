@@ -40,6 +40,8 @@ def _cfg():
         app_id=(os.environ.get('SMS_SDK_APP_ID') or sec.get('sms_sdk_app_id') or '').strip(),
         sign=(os.environ.get('SMS_SIGN_NAME') or sec.get('sms_sign_name') or '').strip(),
         template=(os.environ.get('SMS_TEMPLATE_ID') or sec.get('sms_template_id') or '').strip(),
+        param_count=int((os.environ.get('SMS_TEMPLATE_PARAM_COUNT')
+                         or sec.get('sms_template_param_count') or 1)),
         secret_id=(os.environ.get('TENCENT_SECRET_ID') or sec.get('tencent_secret_id') or '').strip(),
         secret_key=(os.environ.get('TENCENT_SECRET_KEY') or sec.get('tencent_secret_key') or '').strip(),
     )
@@ -90,12 +92,15 @@ def send_verification_code(phone, code, minutes=5):
     phone = phone.strip()
     if not phone.startswith('+'):
         phone = '+86' + phone
+    params = [str(code)]
+    if cfg.get('param_count', 1) >= 2:
+        params.append(str(minutes))
     resp = _tc3_post('SendSms', {
         'PhoneNumberSet': [phone],
         'SmsSdkAppId': cfg['app_id'],
         'SignName': cfg['sign'],
         'TemplateId': cfg['template'],
-        'TemplateParamSet': [str(code), str(minutes)],
+        'TemplateParamSet': params,
     }, cfg['secret_id'], cfg['secret_key'])
     status = (resp.get('SendStatusSet') or [{}])[0]
     if status.get('Code') != 'Ok':
