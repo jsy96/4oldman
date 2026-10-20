@@ -66,7 +66,7 @@ def main():
                     z.write(full, arc)
     print(f'完成：{ZIP}（{os.path.getsize(ZIP) / 1024:.0f} KB）')
     print('→ 云开发 → 云函数 → 新建（Python3.9，空白函数）→ 代码页上传本 zip')
-    print('→ 入口 index.main_handler，内存 256MB，超时 60 秒')
+    print('→ 入口 index.main_handler，内存 512MB，超时 60 秒')
     print('→ 开启 HTTP 访问（云接入），路径尽量填 /；不行则函数加环境变量 STRIP_PREFIX=/路径')
 
 
