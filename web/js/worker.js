@@ -56,7 +56,7 @@ const Worker = {
     Worker.wireOrderButtons(el, rerender);
   },
 
-  orderCard(o, withActions) {
+  orderCard(o, withActions, alt) {
     const actions = [];
     if (o.status === 'pending') actions.push(`<button class="btn btn-small" data-confirm="${o.id}">确认上门</button>`);
     if (o.status === 'confirmed') {
@@ -64,7 +64,7 @@ const Worker = {
       actions.push(`<button class="btn btn-danger btn-small" data-exc="${o.id}">上报异常</button>`);
     }
     return `
-      <div class="order-card card ${o.status}" style="margin-bottom:8px">
+      <div class="order-card card ${o.status}${alt ? ' date-alt' : ''}" style="margin-bottom:8px">
         <div class="head"><span class="time">${esc(o.sched_start.slice(11))} ~ ${esc(o.sched_end.slice(11))}</span>${chip(o.status)}</div>
         <div class="who">${esc(o.customer_name)} · ${esc(o.item_name)}</div>
         <div class="meta">📍 ${esc(o.customer_address || '地址未填写')}</div>
@@ -148,9 +148,7 @@ const Worker = {
         head = `<div class="date-group">${d === todayStr() ? '今天 · ' : ''}${d}</div>`;
         lastDate = d;
       }
-      const card = Worker.orderCard(o).replace('class="card order-card',
-                                               `class="card order-card${groupIdx % 2 ? ' date-alt' : ''}`);
-      return head + card;
+      return head + Worker.orderCard(o, true, groupIdx % 2 === 0);
     }).join('');
     Worker.wireOrderButtons(list, () => Worker.renderOrders(el, scope));
   },

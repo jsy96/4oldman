@@ -131,13 +131,14 @@ input:focus, select:focus, textarea:focus { outline: 2px solid #93c5fd; border-c
 .order-card .time { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .order-card .who { font-size: 17px; font-weight: 600; margin: 2px 0; }
 .order-card .meta { color: var(--muted); font-size: 14px; }
-/* 按日期交替底色：奇数日期组浅蓝，偶数组白，扫一眼就能分清天 */
-.date-alt { background: #e8f0fe; }
-.date-alt .meta { color: #4a5f7d; }
-.date-group { display: inline-block; background: #dbe7ff; color: #1d4ed8; border-radius: 8px;
-  padding: 3px 10px; margin: 14px 2px 8px; font-weight: 700; font-size: 13px; }
+/* 按日期交替底色：日期组一目了然（明显蓝 / 白交替） */
+.date-alt { background: #bfdbfe; }
+.date-alt .meta { color: #2b4c7e; }
+.date-alt.order-card { border-left-width: 6px; }
+.date-group { display: inline-block; background: #1d4ed8; color: #fff; border-radius: 8px;
+  padding: 4px 12px; margin: 14px 2px 8px; font-weight: 700; font-size: 13px; }
 .date-group:first-child { margin-top: 0; }
-.tbl tr.date-alt td { background: #e8f0fe; }
+.tbl tr.date-alt td { background: #bfdbfe; }
 
 /* 状态小标签 */
 .chip { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 13px; white-space: nowrap; }

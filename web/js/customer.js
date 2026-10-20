@@ -8,8 +8,12 @@ const Customer = {
     let alt = false, lastDate = null;
     el.innerHTML = orders.map(o => {
       const d = o.sched_start.slice(0, 10);
-      if (d !== lastDate) { alt = !alt; lastDate = d; }  // 换日期翻一次底色
-      return `
+      let head = '';
+      if (d !== lastDate) {  // 换日期：翻一次底色 + 加日期标题
+        alt = !alt; lastDate = d;
+        head = `<div class="date-group">${d === todayStr() ? '今天 · ' : ''}${d}</div>`;
+      }
+      return head + `
       <div class="card order-card ${o.status}${alt ? ' date-alt' : ''}">
         <div class="head"><span class="time">${esc(o.sched_start)}</span>${chip(o.status)}</div>
         <div class="who">${esc(o.item_name)} <span class="muted small">¥${fmtMoney(o.price_cents)}</span></div>
