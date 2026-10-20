@@ -158,10 +158,10 @@ def plan_route(worker, orders, conf, date_str):
         late_min = int((svc_start - sched).total_seconds() // 60)
         if late_min > 15:
             warnings.append(f'{o["customer_name"]} 预约 {sched:%H:%M}，预计 {svc_start:%H:%M} 才到'
-                            f'（晚 {late_min} 分钟），建议联系顾客改时间或减少当日单量')
+                            f'（晚 {late_min} 分钟）')
         elif (sched - arrive).total_seconds() > 3600:
             warnings.append(f'{o["customer_name"]} 将提前约 '
-                            f'{int((sched - arrive).total_seconds() // 60)} 分钟到达，可在附近稍候')
+                            f'{int((sched - arrive).total_seconds() // 60)} 分钟到达')
         depart, hit = _apply_lunch(svc_start, o['minutes'], lunch_s, lunch_e)
         if hit:
             lunch_used = True

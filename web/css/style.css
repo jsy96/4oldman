@@ -173,6 +173,10 @@ table.tbl { border-collapse: collapse; width: 100%; min-width: 640px; font-size:
   font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 9px; white-space: nowrap;
   box-shadow: 0 1px 4px rgba(0,0,0,.18); transform: translate(-50%, -50%); }
 
+/* 两单之间的间隔标注 */
+.gap-line { margin: 6px 0 6px 44px; padding: 4px 10px; background: #f1f5f9; border-left: 3px solid #93c5fd;
+  border-radius: 6px; color: #475569; font-size: 13px; font-weight: 600; }
+
 /* 行程时间轴 */
 .stop { display: flex; gap: 12px; padding: 11px 0; border-bottom: 1px dashed var(--line); }
 .stop:last-child { border-bottom: none; }
@@ -200,7 +204,7 @@ table.tbl { border-collapse: collapse; width: 100%; min-width: 640px; font-size:
 .ck-item input { width: 21px; height: 21px; accent-color: var(--primary); flex: none; }
 
 /* 分段选择器 */
-.seg { display: inline-flex; background: #e2e8f0; border-radius: 11px; padding: 3px; gap: 3px; }
+.seg { display: inline-flex; flex-wrap: wrap; background: #e2e8f0; border-radius: 11px; padding: 3px; gap: 3px; }
 .seg button { border: none; background: none; padding: 7px 14px; border-radius: 9px; font-size: 14px; color: var(--muted); cursor: pointer; min-height: 38px; }
 .seg button.on { background: #fff; color: var(--primary); font-weight: 700; box-shadow: var(--shadow); }
 

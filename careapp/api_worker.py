@@ -56,11 +56,21 @@ def orders():
     elif scope == 'tomorrow':
         where = "o.worker_id=? AND substr(o.sched_start,1,10)=?"
         rows = _order_list(where, (wid, (date.today() + timedelta(days=1)).isoformat()))
+    elif scope == 'day_after':
+        rows = _order_list("o.worker_id=? AND substr(o.sched_start,1,10)=?",
+                           (wid, (date.today() + timedelta(days=2)).isoformat()))
+    elif scope == 'future':
+        # 后天以后（不含明天、后天）的待服务订单
+        where = ("o.worker_id=? AND o.status IN ('pending','confirmed') "
+                 'AND substr(o.sched_start,1,10) BETWEEN ? AND ?')
+        rows = _order_list(where, (wid,
+                                   (date.today() + timedelta(days=3)).isoformat(),
+                                   (date.today() + timedelta(days=60)).isoformat()))
     elif scope == 'history':
         where = "o.worker_id=? AND o.status IN ('completed','exception','cancelled') AND o.sched_start<?"
         rows = _order_list(where, (wid, services.now_str()[:10]))
         rows.reverse()
-    else:  # 未来 7 天
+    else:  # 兼容旧参数：未来 7 天
         upto = (date.today() + timedelta(days=7)).isoformat()
         where = ("o.worker_id=? AND o.status IN ('pending','confirmed') "
                  'AND substr(o.sched_start,1,10) BETWEEN ? AND ?')

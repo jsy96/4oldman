@@ -95,6 +95,10 @@ ov = call('get', '/api/w/overview', w1)
 assert ov['to_confirm'] >= 1
 t('服务员工作台概览')
 
+for sc_scope in ('today', 'tomorrow', 'day_after', 'future', 'history'):
+    assert 'orders' in call('get', f'/api/w/orders?scope={sc_scope}', w1), sc_scope
+t('订单范围：今天/明天/后天/未来/历史')
+
 pending = [o for o in call('get', f'/api/w/orders?scope=tomorrow', w1)['orders']
            if o['status'] == 'pending']
 call('post', f'/api/w/orders/{pending[0]["id"]}/confirm', w1)

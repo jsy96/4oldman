@@ -127,12 +127,13 @@ const Worker = {
     });
   },
 
-  async renderOrders(el, scope = 'upcoming') {
+  async renderOrders(el, scope = 'today') {
+    const TABS = [['today', '今天'], ['tomorrow', '明天'], ['day_after', '后天'],
+                  ['future', '未来'], ['history', '历史订单']];
     el.innerHTML = `
       <div class="seg" id="wk-scope">
-        <button data-s="upcoming" class="${scope === 'upcoming' ? 'on' : ''}">未来7天</button>
-        <button data-s="today" class="${scope === 'today' ? 'on' : ''}">今日</button>
-        <button data-s="history" class="${scope === 'history' ? 'on' : ''}">历史订单</button>
+        ${TABS.map(([k, label]) =>
+          `<button data-s="${k}" class="${scope === k ? 'on' : ''}">${label}</button>`).join('')}
       </div>
       <div id="wk-list" style="margin-top:12px"><div class="loading">加载中…</div></div>`;
     el.querySelectorAll('#wk-scope button').forEach(b => b.onclick = () => Worker.renderOrders(el, b.dataset.s));
@@ -204,6 +205,8 @@ const Worker = {
         <div class="card" style="padding:8px"><div id="rt-map" class="map" style="height:320px"></div></div>
         <div class="card"><h3>顺序与时间安排</h3>
           ${plan.stops.length ? plan.stops.map(s => `
+            ${s.seq > 1 && plan.legs[s.seq - 1]
+              ? `<div class="gap-line">⏱ 与上一单间隔 ${plan.legs[s.seq - 1].available_min} 分钟</div>` : ''}
             <div class="stop">
               <div class="seq">${s.seq}</div>
               <div class="body">
@@ -270,10 +273,7 @@ const Worker = {
             <div class="seq" style="background:${l.status === 'ok' ? 'var(--green)' : l.status === 'tight' ? 'var(--amber)' : 'var(--red)'}">${l.seq}</div>
             <div class="body">
               <div><b>${esc(l.from_label)} → ${esc(l.to_label)}</b> ${badge(l.status)}</div>
-              <div class="muted small">骑行 ${l.km} km · 预计 ${l.minutes} 分钟；两单间隔 ${l.available_min} 分钟
-                （建议 ≥ ${l.required_min} 分钟 = 骑行 ${l.minutes} + 准备 ${c.buffer_min}）</div>
-              ${l.status === 'late' ? '<div class="warn-box" style="margin:6px 0 0">间隔不足，建议调整预约时间或减少当日单量</div>' : ''}
-              ${l.status === 'tight' ? '<div class="warn-box" style="margin:6px 0 0">间隔偏紧，雨雪天气可能来不及</div>' : ''}
+              <div class="muted small">骑行 ${l.km} km · 预计 ${l.minutes} 分钟 · 间隔 ${l.available_min} 分钟 · 需 ≥ ${l.required_min} 分钟</div>
             </div>
           </div>`).join('')}
       </div>`;
