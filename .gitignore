@@ -7,3 +7,4 @@ server.log
 secrets.json
 scf_bundle.zip
 build_scf/
+cloudbase_run.zip
