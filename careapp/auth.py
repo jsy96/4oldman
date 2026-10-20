@@ -1,11 +1,15 @@
-"""登录、会话与鉴权。"""
+"""登录、会话、鉴权、短信验证码与密码管理。"""
 import functools
+import random
+import re
 import secrets
+import time
 from datetime import datetime
 
 from flask import Blueprint, g, jsonify, request
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from . import sms
 from .db import HASH_METHOD, get_db
 
 bp = Blueprint('auth', __name__)
@@ -32,7 +36,8 @@ def login():
     db.execute('INSERT INTO sessions(token,user_id,created_at) VALUES(?,?,?)',
                (token, row['id'], datetime.now().strftime('%Y-%m-%d %H:%M')))
     db.commit()
-    return jsonify(token=token, role=row['role'], name=row['name'], id=row['id'])
+    return jsonify(token=token, role=row['role'], name=row['name'], id=row['id'],
+                   is_super=row['is_super'])
 
 
 @bp.post('/api/logout')
@@ -76,4 +81,119 @@ def me():
                        (u['worker_id'],)).fetchone() if u['worker_id'] else None
         extra = dict(worker=dict(w) if w else None, balance_cents=u['balance_cents'])
     return jsonify(id=u['id'], phone=u['phone'], role=u['role'], name=u['name'],
-                   address=u['address'], **extra)
+                   address=u['address'], is_super=u.get('is_super', 0), **extra)
+
+
+# ---------- 短信验证码 / 密码 ----------
+
+@bp.post('/api/auth/send-code')
+def send_code():
+    d = request.get_json(force=True, silent=True) or {}
+    phone = (d.get('phone') or '').strip()
+    scene = (d.get('scene') or 'reset').strip()
+    if scene not in ('reset', 'change'):
+        return jsonify(error='场景不正确'), 400
+    if not re.fullmatch(r'\d{5,15}', phone):
+        return jsonify(error='手机号格式不正确'), 400
+    db = get_db()
+    user = db.execute('SELECT id, active FROM users WHERE phone=?', (phone,)).fetchone()
+    if user is not None and not user['active']:
+        return jsonify(error='账号已停用，请联系管理员'), 403
+    if scene == 'reset' and user is None:
+        # 不暴露手机号是否注册
+        return jsonify(ok=True, message='若该手机号已注册，验证码将发送')
+    now_epoch = int(time.time())
+    last = db.execute('SELECT created_at FROM sms_codes WHERE phone=? AND scene=? '
+                      'ORDER BY id DESC LIMIT 1', (phone, scene)).fetchone()
+    if last:
+        try:
+            last_ts = int(datetime.strptime(last['created_at'], '%Y-%m-%d %H:%M:%S').timestamp())
+        except (TypeError, ValueError):
+            last_ts = 0
+        if now_epoch - last_ts < 60:
+            return jsonify(error='发送过于频繁，请 1 分钟后再试'), 429
+    code = f'{random.randint(0, 999999):06d}'
+    try:
+        mode = sms.send_verification_code(phone, code, 5)
+    except sms.SmsNotConfigured as e:
+        return jsonify(error=str(e)), 503
+    except Exception as e:
+        return jsonify(error=f'短信发送失败，请稍后重试（{e}）'), 502
+    db.execute('INSERT INTO sms_codes(phone,code,scene,expires_at,used,attempts,created_at) '
+               'VALUES(?,?,?,?,0,0,?)',
+               (phone, code, scene, now_epoch + 300,
+                datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+    db.commit()
+    resp = dict(ok=True, message='验证码已发送，5 分钟内有效')
+    if mode == 'debug':
+        resp['debug_code'] = code  # 仅本地调试模式返回
+    return jsonify(resp)
+
+
+def _check_code(db, phone, scene, code):
+    """校验验证码；返回 (ok, error)。"""
+    row = db.execute('SELECT * FROM sms_codes WHERE phone=? AND scene=? AND used=0 '
+                     'ORDER BY id DESC LIMIT 1', (phone, scene)).fetchone()
+    if row is None:
+        return False, '请先获取验证码'
+    if int(time.time()) > row['expires_at']:
+        db.execute('UPDATE sms_codes SET used=1 WHERE id=?', (row['id'],))
+        db.commit()
+        return False, '验证码已过期，请重新获取'
+    if row['attempts'] >= 5:
+        db.execute('UPDATE sms_codes SET used=1 WHERE id=?', (row['id'],))
+        db.commit()
+        return False, '验证码错误次数过多，请重新获取'
+    if str(row['code']) != str(code):
+        db.execute('UPDATE sms_codes SET attempts=attempts+1 WHERE id=?', (row['id'],))
+        db.commit()
+        return False, '验证码错误'
+    db.execute('UPDATE sms_codes SET used=1 WHERE id=?', (row['id'],))
+    return True, ''
+
+
+@bp.post('/api/auth/reset-password')
+def reset_password():
+    """未登录：手机号 + 短信验证码重置密码。"""
+    d = request.get_json(force=True, silent=True) or {}
+    phone = (d.get('phone') or '').strip()
+    code = (d.get('code') or '').strip()
+    new = d.get('new_password') or ''
+    if not re.fullmatch(r'\d{5,15}', phone) or not code:
+        return jsonify(error='请填写手机号和验证码'), 400
+    if len(new) < 6:
+        return jsonify(error='新密码至少 6 位'), 400
+    db = get_db()
+    user = db.execute('SELECT id, active FROM users WHERE phone=?', (phone,)).fetchone()
+    if user is None:
+        return jsonify(error='该手机号未注册'), 400
+    if not user['active']:
+        return jsonify(error='账号已停用，请联系管理员'), 403
+    ok, err = _check_code(db, phone, 'reset', code)
+    if not ok:
+        return jsonify(error=err), 400
+    db.execute('UPDATE users SET password_hash=? WHERE id=?',
+               (generate_password_hash(new, method=HASH_METHOD), user['id']))
+    db.execute('DELETE FROM sessions WHERE user_id=?', (user['id'],))  # 所有设备重新登录
+    db.commit()
+    return jsonify(ok=True, message='密码已重置，请用新密码登录')
+
+
+@bp.post('/api/auth/change-password')
+@auth_required()
+def change_password():
+    """已登录：原密码 + 新密码修改。"""
+    d = request.get_json(force=True, silent=True) or {}
+    old = d.get('old_password') or ''
+    new = d.get('new_password') or ''
+    if len(new) < 6:
+        return jsonify(error='新密码至少 6 位'), 400
+    db = get_db()
+    row = db.execute('SELECT password_hash FROM users WHERE id=?', (g.user['id'],)).fetchone()
+    if not check_password_hash(row['password_hash'], old):
+        return jsonify(error='原密码错误'), 400
+    db.execute('UPDATE users SET password_hash=? WHERE id=?',
+               (generate_password_hash(new, method=HASH_METHOD), g.user['id']))
+    db.execute('DELETE FROM sessions WHERE user_id=? AND token!=?', (g.user['id'], g.token))
+    db.commit()
+    return jsonify(ok=True, message='密码已修改')

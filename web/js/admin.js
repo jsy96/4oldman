@@ -331,13 +331,15 @@ const Admin = {
   /* ============ 人员管理 ============ */
   async renderUsers(el, role = 'worker') {
     await this.loadRefs();
+    const tabs = [['worker', '服务员'], ['customer', '顾客']];
+    if (ME.is_super) tabs.push(['admin', '管理员']);
     el.innerHTML = `
       <div class="card">
         <h3>人员管理
           <span class="row">
             <span class="seg" id="us-role">
-              <button data-r="worker" class="${role === 'worker' ? 'on' : ''}">服务员</button>
-              <button data-r="customer" class="${role === 'customer' ? 'on' : ''}">顾客</button>
+              ${tabs.map(([k, label]) =>
+                `<button data-r="${k}" class="${role === k ? 'on' : ''}">${label}</button>`).join('')}
             </span>
             <button class="btn btn-small" id="us-new">➕ 新增</button>
           </span>
@@ -356,10 +358,13 @@ const Admin = {
       <div class="order-card card ${u.active ? 'confirmed' : 'cancelled'}" style="margin-bottom:8px">
         <div class="head"><span class="who">${esc(u.name)} ${u.active ? '' : '<span class="chip gray">已停用</span>'}</span></div>
         <div class="meta">📱 ${esc(u.phone)}</div>
-        <div class="meta">📍 ${esc(u.address || '地址未填写')} ${u.lat != null ? '· 已定位' : '· <b style="color:var(--red)">未定位</b>'}</div>
-        ${role === 'worker'
-          ? `<div class="meta">固定顾客 ${u.customer_count} 人</div>`
-          : `<div class="meta">服务员：${esc(u.worker_name || '未指派')} · 余额 ¥${fmtMoney(u.balance_cents)}</div>`}
+        ${role === 'admin'
+          ? `<div class="meta">${u.is_super ? '<span class="chip blue">超级管理员</span>' : '<span class="chip gray">普通管理员</span>'}
+               · 创建于 ${esc(u.created_at || '')}</div>`
+          : `<div class="meta">📍 ${esc(u.address || '地址未填写')} ${u.lat != null ? '· 已定位' : '· <b style="color:var(--red)">未定位</b>'}</div>
+             ${role === 'worker'
+               ? `<div class="meta">固定顾客 ${u.customer_count} 人</div>`
+               : `<div class="meta">服务员：${esc(u.worker_name || '未指派')} · 余额 ¥${fmtMoney(u.balance_cents)}</div>`}`}
         <div class="contact-btns">
           <button class="btn btn-ghost btn-small" data-edit="${u.id}">编辑</button>
           ${u.active
@@ -390,14 +395,17 @@ const Admin = {
 
   userModal(role, u, done) {
     const isNew = !u;
+    const isAdminRole = role === 'admin';
+    const roleName = role === 'worker' ? '服务员' : role === 'customer' ? '顾客' : '管理员';
     let marker = null, pos = u && u.lat != null ? [u.lat, u.lng] : null;
-    openModal(isNew ? `新增${role === 'worker' ? '服务员' : '顾客'}` : `编辑：${u.name}`, `
+    openModal(isNew ? `新增${roleName}` : `编辑：${u.name}`, `
       <div class="frow">
         <div><label class="fl">姓名</label><input type="text" id="uf-name" value="${u ? esc(u.name) : ''}"></div>
         <div><label class="fl">手机号（账号）</label><input type="tel" id="uf-phone" value="${u ? esc(u.phone) : ''}"></div>
       </div>
       <label class="fl">${isNew ? '初始密码' : '重置密码（留空不改）'}</label>
       <input type="text" id="uf-pwd" placeholder="至少 6 位" ${u ? 'value=""' : ''}>
+      ${isAdminRole ? '<div class="muted small" style="margin-top:8px">管理员账号可管理自己名下的服务員与顾客，数据互相隔离。</div>' : `
       <label class="fl">居住地址</label>
       <input type="text" id="uf-addr" value="${u ? esc(u.address) : ''}" placeholder="例：江汉区解放大道690号">
       <button type="button" class="btn btn-ghost btn-small" id="uf-geo" style="margin-top:6px">📍 根据地址自动定位</button>
@@ -408,7 +416,7 @@ const Admin = {
         .map(w => `<option value="${w.id}" ${u && u.worker_id === w.id ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>` : ''}
       <label class="fl">位置（点击地图打点，用于路线规划）</label>
       <div id="uf-map" class="map" style="height:240px"></div>
-      <div class="muted small" id="uf-pos">${pos ? `已定位：${pos[0].toFixed(5)}, ${pos[1].toFixed(5)}` : '未设置位置'}</div>`, {
+      <div class="muted small" id="uf-pos">${pos ? `已定位：${pos[0].toFixed(5)}, ${pos[1].toFixed(5)}` : '未设置位置'}</div>`}`, {
       okText: '保存',
       onOk: async () => {
         try {
@@ -416,8 +424,9 @@ const Admin = {
             role, name: document.getElementById('uf-name').value.trim(),
             phone: document.getElementById('uf-phone').value.trim(),
             password: document.getElementById('uf-pwd').value,
-            address: document.getElementById('uf-addr').value.trim(),
-            lat: pos ? pos[0] : null, lng: pos ? pos[1] : null,
+            address: isAdminRole ? '' : document.getElementById('uf-addr').value.trim(),
+            lat: isAdminRole ? null : (pos ? pos[0] : null),
+            lng: isAdminRole ? null : (pos ? pos[1] : null),
           };
           if (role === 'customer') body.worker_id = +document.getElementById('uf-worker').value;
           if (isNew) await API.call('/api/a/users', { method: 'POST', body });
@@ -429,6 +438,7 @@ const Admin = {
         return false;
       },
       onMount(box) {
+        if (isAdminRole) return;  // 管理员无需地图选点
         setTimeout(() => {
           const map = Maps.create('uf-map');
           if (pos) {

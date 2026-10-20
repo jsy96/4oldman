@@ -261,4 +261,54 @@ bad = c.delete(f'/api/a/users/{workers[0]["id"]}', headers={'Authorization': f'B
 assert bad.status_code == 400
 t('有顾客的服务员禁止停用')
 
+# ---------- 多管理员数据隔离 ----------
+new_admin = call('post', '/api/a/users', admin,
+                 data={'role': 'admin', 'phone': '13900000002', 'name': '管理员2',
+                       'password': '123456'})
+admin2 = login('13900000002', '123456')
+assert call('get', '/api/a/users?role=worker', admin2)['users'] == [], '新管理员不应看到他人员工'
+assert len(call('get', '/api/a/users?role=worker', admin)['users']) >= 2
+w2 = call('post', '/api/a/users', admin2,
+          data={'role': 'worker', 'phone': '13700000001', 'name': '管理员2的员工',
+                'password': '123456', 'address': '测试路3号', 'lat': 31.25, 'lng': 121.50})
+c2 = call('post', '/api/a/users', admin2,
+          data={'role': 'customer', 'phone': '13700000002', 'name': '管理员2的顾客',
+                'password': '123456', 'address': '测试路4号', 'lat': 31.26, 'lng': 121.51,
+                'worker_id': w2['id']})
+assert all(u['id'] != w2['id'] for u in call('get', '/api/a/users?role=worker', admin)['users'])
+assert all(u['id'] != c2['id'] for u in call('get', '/api/a/users?role=customer', admin)['users'])
+call('post', '/api/a/users', admin,
+     data={'role': 'customer', 'phone': '13700000003', 'name': '越权顾客',
+           'password': '123456', 'worker_id': w2['id']}, expect=400)
+call('post', '/api/a/orders', admin,
+     data={'customer_id': c2['id'], 'item_id': item['id'],
+           'date': d_after, 'time': '11:00'}, expect=400)
+t('多管理员数据隔离（员工/顾客/订单）')
+
+# ---------- 短信验证码重置密码 / 修改密码 ----------
+import os as _os
+_os.environ['CARE_SMS_DEBUG'] = '1'
+c2_tok = login('13700000002', '123456')
+sent = call('post', '/api/auth/send-code', data={'phone': '13700000002', 'scene': 'reset'})
+assert sent.get('debug_code'), sent
+t('短信验证码发送（调试模式）')
+call('post', '/api/auth/send-code', data={'phone': '13700000002', 'scene': 'reset'}, expect=429)
+t('验证码发送频率限制（60秒）')
+call('post', '/api/auth/reset-password',
+     data={'phone': '13700000002', 'code': '000000', 'new_password': 'newpass123'}, expect=400)
+t('错误验证码被拒绝')
+call('post', '/api/auth/reset-password',
+     data={'phone': '13700000002', 'code': sent['debug_code'], 'new_password': 'newpass123'})
+call('post', '/api/login', data={'phone': '13700000002', 'password': '123456'}, expect=401)
+new_tok = login('13700000002', 'newpass123')
+t('验证码重置密码（旧密码失效）')
+call('get', '/api/me', c2_tok, expect=401)  # 重置后旧会话失效
+call('post', '/api/auth/change-password', new_tok,
+     data={'old_password': 'newpass123', 'new_password': '123456'})
+assert login('13700000002', '123456')
+t('登录用户修改密码')
+
+import os as _os2
+_os2.environ.pop('CARE_SMS_DEBUG', None)
+
 print(f'\n全部通过：{len(PASSED)} 项')

@@ -124,6 +124,7 @@ function showLogin() {
   $('#app-view').hidden = true;
   $('#login-view').hidden = false;
   _hideBoot();
+  $('#forgot-link').onclick = openForgotModal;
   $('#login-form').onsubmit = async e => {
     e.preventDefault();
     const err = $('#login-err');
@@ -132,7 +133,7 @@ function showLogin() {
       const r = await API.call('/api/login', { method: 'POST', body: {
         phone: $('#login-phone').value.trim(), password: $('#login-pwd').value } });
       API.setToken(r.token);
-      ME = { id: r.id, role: r.role, name: r.name };  // 登录响应已含用户信息，省一次往返
+      ME = { id: r.id, role: r.role, name: r.name, is_super: r.is_super || 0 };  // 登录响应已含用户信息
       showApp();
     } catch (ex) {
       err.textContent = ex.message;
@@ -149,6 +150,7 @@ function showApp() {
   $('#brand-name').textContent = CONF.app_name;
   document.title = `${CONF.app_name} · ${ROLE_TEXT[ME.role]}`;
   $('#top-hello').textContent = `${ME.name}（${ROLE_TEXT[ME.role]}）`;
+  $('#btn-pwd').onclick = openChangePwdModal;
   $('#btn-logout').onclick = async () => {
     try { await API.call('/api/logout', { method: 'POST' }); } catch (e) { /* 忽略 */ }
     API.setToken('');
@@ -168,6 +170,87 @@ function switchTab(key) {
     b.classList.toggle('active', b.dataset.tab === key));
   Maps.refresh();
   RENDER[ME.role][key](main);
+}
+
+/* ---------- 密码管理 ---------- */
+function openChangePwdModal() {
+  openModal('修改密码', `
+    <label class="fl">原密码</label>
+    <input type="password" id="cp-old" autocomplete="current-password">
+    <label class="fl">新密码（至少 6 位）</label>
+    <input type="password" id="cp-new" autocomplete="new-password">
+    <label class="fl">确认新密码</label>
+    <input type="password" id="cp-new2" autocomplete="new-password">`, {
+    okText: '保存',
+    onOk: async () => {
+      const o = $('#cp-old').value, n = $('#cp-new').value, n2 = $('#cp-new2').value;
+      if (!o || !n) { toast('请填写完整'); return false; }
+      if (n !== n2) { toast('两次输入的新密码不一致'); return false; }
+      try {
+        await API.call('/api/auth/change-password',
+          { method: 'POST', body: { old_password: o, new_password: n } });
+        toast('密码已修改', true);
+        closeModal();
+      } catch (e) { toast(e.message); }
+      return false;
+    },
+  });
+}
+
+function openForgotModal() {
+  openModal('找回密码', `
+    <label class="fl">手机号（账号）</label>
+    <input type="tel" id="fp-phone" value="${esc($('#login-phone').value.trim())}">
+    <label class="fl">验证码</label>
+    <div class="row">
+      <input type="text" id="fp-code" style="flex:1" placeholder="6 位验证码" inputmode="numeric">
+      <button type="button" class="btn btn-ghost" id="fp-send">发送验证码</button>
+    </div>
+    <label class="fl">新密码（至少 6 位）</label>
+    <input type="password" id="fp-new" autocomplete="new-password">
+    <div class="muted small" style="margin-top:8px">验证码 5 分钟内有效，同一手机号 1 分钟内只能发送一次。</div>`, {
+    okText: '重置密码',
+    onMount(box) {
+      box.querySelector('#fp-send').onclick = async () => {
+        const phone = box.querySelector('#fp-phone').value.trim();
+        if (!phone) { toast('请输入手机号'); return; }
+        const btn = box.querySelector('#fp-send');
+        try {
+          const r = await API.call('/api/auth/send-code',
+            { method: 'POST', body: { phone, scene: 'reset' } });
+          if (r.debug_code) {
+            box.querySelector('#fp-code').value = r.debug_code;
+            toast('调试模式：验证码已自动填入', true);
+          } else {
+            toast(r.message || '验证码已发送', true);
+          }
+          let left = 60;
+          btn.disabled = true;
+          btn.textContent = left + 's 后重发';
+          const t = setInterval(() => {
+            left -= 1;
+            if (left <= 0) { clearInterval(t); btn.disabled = false; btn.textContent = '发送验证码'; }
+            else btn.textContent = left + 's 后重发';
+          }, 1000);
+        } catch (e) { toast(e.message); }
+      };
+    },
+    onOk: async () => {
+      const phone = $('#fp-phone').value.trim();
+      const code = $('#fp-code').value.trim();
+      const n = $('#fp-new').value;
+      if (!phone || !code || !n) { toast('请填写完整'); return false; }
+      try {
+        await API.call('/api/auth/reset-password',
+          { method: 'POST', body: { phone, code, new_password: n } });
+        toast('密码已重置，请用新密码登录', true);
+        $('#login-phone').value = phone;
+        $('#login-pwd').value = '';
+        closeModal();
+      } catch (e) { toast(e.message); }
+      return false;
+    },
+  });
 }
 
 /* ---------- 启动 ---------- */

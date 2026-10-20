@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS users(
   lat __REAL__,
   lng __REAL__,
   worker_id INTEGER REFERENCES users(id),
+  admin_id INTEGER REFERENCES users(id),
+  is_super INTEGER NOT NULL DEFAULT 0,
   balance_cents INTEGER NOT NULL DEFAULT 0,
   active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL
@@ -103,6 +105,17 @@ CREATE TABLE IF NOT EXISTS sessions(
   user_id INTEGER NOT NULL REFERENCES users(id),
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS sms_codes(
+  id __ID__,
+  phone TEXT NOT NULL,
+  code TEXT NOT NULL,
+  scene TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  used INTEGER NOT NULL DEFAULT 0,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sms_phone ON sms_codes(phone, scene);
 CREATE INDEX IF NOT EXISTS idx_orders_worker ON orders(worker_id, sched_start);
 CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_id, sched_start);
 CREATE INDEX IF NOT EXISTS idx_tx_customer ON transactions(customer_id, created_at);
@@ -118,6 +131,9 @@ SCHEMA_MYSQL = (SCHEMA.replace('__ID__', 'INT PRIMARY KEY AUTO_INCREMENT')
                       .replace('address TEXT NOT NULL DEFAULT \'\'',
                                'address VARCHAR(255) NOT NULL DEFAULT \'\'')
                       .replace('token TEXT PRIMARY KEY', 'token VARCHAR(64) PRIMARY KEY')
+                      # 短信表：phone/scene 参与索引，必须 VARCHAR
+                      .replace('phone TEXT NOT NULL', 'phone VARCHAR(20) NOT NULL')
+                      .replace('scene TEXT NOT NULL', 'scene VARCHAR(20) NOT NULL')
                       # MySQL 的 TEXT 列不能建索引，时间列统一 VARCHAR
                       .replace('sched_start TEXT NOT NULL', 'sched_start VARCHAR(32) NOT NULL')
                       .replace('sched_end TEXT NOT NULL', 'sched_end VARCHAR(32) NOT NULL')
@@ -344,11 +360,39 @@ def _has_column(db, table, col):
 
 
 def _migrate(db):
-    """增量迁移：服务项目单价（元/小时）、订单时长字段。"""
+    """增量迁移：服务项目单价（元/小时）、订单时长、管理员归属、短信验证码表。"""
     if not _has_column(db, 'service_items', 'unit_price_cents'):
         db.execute('ALTER TABLE service_items ADD COLUMN unit_price_cents INTEGER NOT NULL DEFAULT 0')
     if not _has_column(db, 'orders', 'duration_minutes'):
         db.execute('ALTER TABLE orders ADD COLUMN duration_minutes INTEGER NOT NULL DEFAULT 0')
+    if not _has_column(db, 'users', 'admin_id'):
+        db.execute('ALTER TABLE users ADD COLUMN admin_id INTEGER')
+    if not _has_column(db, 'users', 'is_super'):
+        db.execute('ALTER TABLE users ADD COLUMN is_super INTEGER NOT NULL DEFAULT 0')
+    # admin_id 索引必须在加列之后再建（旧库加列前不存在）
+    if db.kind == 'sqlite':
+        has_idx = any(r['name'] == 'idx_users_admin'
+                      for r in db.execute('PRAGMA index_list(users)').fetchall())
+    elif db.kind == 'mysql':
+        has_idx = db.execute(
+            'SELECT COUNT(*) AS c FROM information_schema.statistics '
+            "WHERE table_schema=DATABASE() AND table_name='users' AND index_name='idx_users_admin'"
+        ).fetchone()['c'] > 0
+    else:
+        has_idx = db.execute(
+            'SELECT COUNT(*) AS c FROM pg_indexes '
+            "WHERE tablename='users' AND indexname='idx_users_admin'").fetchone()['c'] > 0
+    if not has_idx:
+        db.execute('CREATE INDEX idx_users_admin ON users(admin_id)')
+    # 既有数据：员工与顾客归属到最早的管理员；最早管理员标记为超级管理员
+    first_admin = db.execute("SELECT id FROM users WHERE role='admin' ORDER BY id LIMIT 1").fetchone()
+    if first_admin:
+        aid = first_admin['id']
+        db.execute('UPDATE users SET admin_id=? WHERE role IN (\'worker\',\'customer\') AND admin_id IS NULL',
+                   (aid,))
+        sup = db.execute("SELECT COUNT(*) AS c FROM users WHERE role='admin' AND is_super=1").fetchone()['c']
+        if not sup:
+            db.execute('UPDATE users SET is_super=1 WHERE id=?', (aid,))
     # 旧项目：按「原价 / 原标准时长」折算每小时单价（取整到元）
     for r in db.execute('SELECT id, minutes, price_cents, unit_price_cents FROM service_items').fetchall():
         if not r['unit_price_cents'] and r['minutes']:
@@ -416,6 +460,8 @@ def seed(db):
     c2 = u('13800002002', '123456', 'customer', '周明德', '硚口区解放大道55号', lat0 + 0.018, lng0 - 0.012, w1)
     c3 = u('13800002003', '123456', 'customer', '吴淑珍', '洪山区珞狮路500号', lat0 - 0.020, lng0 - 0.015, w2)
     c4 = u('13800002004', '123456', 'customer', '郑国强', '青山区和平大道300号', lat0 - 0.008, lng0 + 0.020, w2)
+    db.execute('UPDATE users SET is_super=1 WHERE id=?', (admin,))
+    db.execute("UPDATE users SET admin_id=? WHERE role IN ('worker','customer')", (admin,))
 
     items = {}
     for name, minutes, price, unit, pay in [

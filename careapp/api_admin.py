@@ -15,6 +15,29 @@ from flask import current_app
 
 bp = Blueprint('admin', __name__, url_prefix='/api/a')
 
+
+def _scope():
+    """当前管理员 id：员工/顾客/订单等数据按此隔离。"""
+    return g.user['id']
+
+
+def _worker_in_scope(uid):
+    return get_db().execute(
+        "SELECT * FROM users WHERE id=? AND role='worker' AND admin_id=?",
+        (uid, _scope())).fetchone()
+
+
+def _customer_in_scope(uid):
+    return get_db().execute(
+        "SELECT * FROM users WHERE id=? AND role='customer' AND admin_id=?",
+        (uid, _scope())).fetchone()
+
+
+def _order_in_scope(oid):
+    return get_db().execute(
+        'SELECT o.* FROM orders o JOIN users w ON w.id=o.worker_id '
+        'WHERE o.id=? AND w.admin_id=?', (oid, _scope())).fetchone()
+
 STATUS_TEXT = {'pending': '待确认', 'confirmed': '已确认', 'completed': '已完成',
                'exception': '异常', 'cancelled': '已取消'}
 
@@ -30,15 +53,23 @@ def users():
         rows = db.execute(
             'SELECT u.id, u.phone, u.name, u.address, u.lat, u.lng, u.active, '
             '(SELECT COUNT(*) FROM users c WHERE c.worker_id=u.id AND c.active=1) AS customer_count '
-            "FROM users u WHERE u.role='worker' ORDER BY u.active DESC, u.name").fetchall()
+            "FROM users u WHERE u.role='worker' AND u.admin_id=? "
+            'ORDER BY u.active DESC, u.name', (_scope(),)).fetchall()
     elif role == 'customer':
         rows = db.execute(
             'SELECT c.id, c.phone, c.name, c.address, c.lat, c.lng, c.active, c.balance_cents, '
             'c.worker_id, w.name AS worker_name '
             'FROM users c LEFT JOIN users w ON w.id=c.worker_id '
-            "WHERE c.role='customer' ORDER BY c.active DESC, c.name").fetchall()
+            "WHERE c.role='customer' AND c.admin_id=? "
+            'ORDER BY c.active DESC, c.name', (_scope(),)).fetchall()
+    elif role == 'admin':
+        if not g.user.get('is_super'):
+            return jsonify(error='仅超级管理员可查看管理员列表'), 403
+        rows = db.execute("SELECT id, phone, name, active, is_super, created_at "
+                          "FROM users WHERE role='admin' ORDER BY id").fetchall()
     else:
-        rows = db.execute('SELECT id, phone, name, role, active FROM users ORDER BY id').fetchall()
+        rows = db.execute("SELECT id, phone, name, role, active FROM users "
+                          "WHERE admin_id=? ORDER BY id", (_scope(),)).fetchall()
     return jsonify(users=[dict(r) for r in rows])
 
 
@@ -71,17 +102,21 @@ def create_user():
         return jsonify(error='初始密码至少 6 位'), 400
     if d['role'] == 'customer' and not p['worker_id']:
         return jsonify(error='请为顾客指派服务员'), 400
+    if d['role'] == 'admin' and not g.user.get('is_super'):
+        return jsonify(error='仅超级管理员可创建管理员'), 403
     db = get_db()
     if db.execute('SELECT 1 FROM users WHERE phone=?', (p['phone'],)).fetchone():
         return jsonify(error='该手机号已被使用'), 400
     if p['worker_id'] and not db.execute(
-            "SELECT 1 FROM users WHERE id=? AND role='worker'", (p['worker_id'],)).fetchone():
-        return jsonify(error='所指派的服务员不存在'), 400
+            "SELECT 1 FROM users WHERE id=? AND role='worker' AND admin_id=?",
+            (p['worker_id'], _scope())).fetchone():
+        return jsonify(error='所指派的服务员不存在或不属于你'), 400
+    owner = None if d['role'] == 'admin' else _scope()
     uid = insert_returning_id(
-        db, 'INSERT INTO users(phone,password_hash,role,name,address,lat,lng,worker_id,created_at) '
-            'VALUES(?,?,?,?,?,?,?,?,?)',
+        db, 'INSERT INTO users(phone,password_hash,role,name,address,lat,lng,worker_id,admin_id,created_at) '
+            'VALUES(?,?,?,?,?,?,?,?,?,?)',
         (p['phone'], generate_password_hash(p['password'], method=HASH_METHOD), d['role'], p['name'],
-         p['address'], p['lat'], p['lng'], p['worker_id'], services.now_str()))
+         p['address'], p['lat'], p['lng'], p['worker_id'], owner, services.now_str()))
     db.commit()
     return jsonify(ok=True, id=uid)
 
@@ -94,6 +129,11 @@ def update_user(uid):
     row = db.execute('SELECT * FROM users WHERE id=?', (uid,)).fetchone()
     if row is None:
         return jsonify(error='用户不存在'), 404
+    if row['role'] == 'admin':
+        if uid != g.user['id'] and not g.user.get('is_super'):
+            return jsonify(error='无权修改其他管理员'), 403
+    elif row['admin_id'] != _scope():
+        return jsonify(error='无权修改该用户'), 403
     try:
         p = _user_payload({**dict(row), **{k: v for k, v in d.items() if k in
                                            ('phone', 'name', 'password', 'address', 'lat', 'lng', 'worker_id')}})
@@ -101,6 +141,8 @@ def update_user(uid):
         return jsonify(error=str(e)), 400
     if db.execute('SELECT 1 FROM users WHERE phone=? AND id!=?', (p['phone'], uid)).fetchone():
         return jsonify(error='该手机号已被使用'), 400
+    if row['role'] == 'customer' and p['worker_id'] and not _worker_in_scope(p['worker_id']):
+        return jsonify(error='所指派的服务员不存在或不属于你'), 400
     sets, params = ['phone=?', 'name=?', 'address=?', 'lat=?', 'lng=?', 'worker_id=?'], \
         [p['phone'], p['name'], p['address'], p['lat'], p['lng'],
          p['worker_id'] if row['role'] == 'customer' else row['worker_id']]
@@ -128,6 +170,11 @@ def deactivate_user(uid):
         return jsonify(error='用户不存在'), 404
     if row['id'] == g.user['id']:
         return jsonify(error='不能停用自己的账号'), 400
+    if row['role'] == 'admin':
+        if not g.user.get('is_super'):
+            return jsonify(error='仅超级管理员可停用管理员'), 403
+    elif row['admin_id'] != _scope():
+        return jsonify(error='无权停用该用户'), 403
     if row['role'] == 'worker':
         n = db.execute('SELECT COUNT(*) c FROM users WHERE worker_id=? AND active=1', (uid,)).fetchone()['c']
         if n:
@@ -240,6 +287,8 @@ def _order_filters(args):
 
 def _query_orders(args):
     where, params = _order_filters(args)
+    where = 'uw.admin_id=? AND ' + where
+    params = [_scope()] + params
     rows = get_db().execute(
         'SELECT o.*, si.name AS item_name, uc.name AS customer_name, uc.phone AS customer_phone, '
         'uw.name AS worker_name FROM orders o '
@@ -261,10 +310,10 @@ def create_order():
     """管理员代顾客下单（如电话预约）。"""
     d = request.get_json(force=True, silent=True) or {}
     db = get_db()
-    customer = db.execute("SELECT * FROM users WHERE id=? AND role='customer'",
-                          (d.get('customer_id'),)).fetchone()
+    customer = db.execute("SELECT * FROM users WHERE id=? AND role='customer' AND admin_id=?",
+                          (d.get('customer_id'), _scope())).fetchone()
     if customer is None:
-        return jsonify(error='顾客不存在'), 400
+        return jsonify(error='顾客不存在或不属于你'), 400
     if not customer['worker_id']:
         return jsonify(error='该顾客未指派服务员'), 400
     item = db.execute('SELECT * FROM service_items WHERE id=? AND active=1', (d.get('item_id'),)).fetchone()
@@ -278,6 +327,8 @@ def create_order():
     except (TypeError, ValueError):
         return jsonify(error='日期时间或时长格式不正确'), 400
     worker = db.execute('SELECT * FROM users WHERE id=?', (customer['worker_id'],)).fetchone()
+    if worker is None or worker['admin_id'] != _scope():
+        return jsonify(error='该顾客的服务员不属于你'), 400
     end_dt = start_dt + timedelta(minutes=duration)
     conflicts = services.get_conflicts(worker['id'], start_dt, end_dt)
     if conflicts and not d.get('force'):
@@ -300,8 +351,8 @@ def create_order():
 def check_conflict():
     """管理员代下单前的一键冲突检查。"""
     db = get_db()
-    customer = db.execute("SELECT * FROM users WHERE id=? AND role='customer'",
-                          (request.args.get('customer_id'),)).fetchone()
+    customer = db.execute("SELECT * FROM users WHERE id=? AND role='customer' AND admin_id=?",
+                          (request.args.get('customer_id'), _scope())).fetchone()
     if customer is None or not customer['worker_id']:
         return jsonify(error='顾客不存在或未指派服务员'), 400
     item = db.execute('SELECT * FROM service_items WHERE id=? AND active=1',
@@ -329,13 +380,15 @@ def check_conflict():
 @bp.get('/orders/<int:oid>/logs')
 @auth_required('admin')
 def order_logs(oid):
+    if _order_in_scope(oid) is None:
+        return jsonify(error='订单不存在'), 404
     rows = get_db().execute('SELECT * FROM order_logs WHERE order_id=? ORDER BY id DESC',
                             (oid,)).fetchall()
     return jsonify(logs=[dict(r) for r in rows])
 
 
 def _load_order(oid):
-    o = get_db().execute('SELECT * FROM orders WHERE id=?', (oid,)).fetchone()
+    o = _order_in_scope(oid)
     if o is None:
         return None, (jsonify(error='订单不存在'), 404)
     return dict(o), None
@@ -378,8 +431,8 @@ def reassign(oid):
         return jsonify(error='已完成/已取消订单不能改派'), 400
     d = request.get_json(force=True, silent=True) or {}
     db = get_db()
-    w = db.execute("SELECT * FROM users WHERE id=? AND role='worker' AND active=1",
-                   (d.get('worker_id'),)).fetchone()
+    w = db.execute("SELECT * FROM users WHERE id=? AND role='worker' AND active=1 AND admin_id=?",
+                   (d.get('worker_id'), _scope())).fetchone()
     if w is None:
         return jsonify(error='服务员不存在或已停用'), 400
     old = db.execute('SELECT name FROM users WHERE id=?', (o['worker_id'],)).fetchone()['name']
@@ -431,11 +484,11 @@ def schedule_check():
         return jsonify(error='日期格式不正确'), 400
     db = get_db()
     if request.args.get('worker_id'):
-        workers = db.execute("SELECT * FROM users WHERE id=? AND role='worker'",
-                             (request.args['worker_id'],)).fetchall()
+        workers = db.execute("SELECT * FROM users WHERE id=? AND role='worker' AND admin_id=?",
+                             (request.args['worker_id'], _scope())).fetchall()
     else:
-        workers = db.execute("SELECT * FROM users WHERE role='worker' AND active=1 "
-                             'ORDER BY name').fetchall()
+        workers = db.execute("SELECT * FROM users WHERE role='worker' AND active=1 AND admin_id=? "
+                             'ORDER BY name', (_scope(),)).fetchall()
     out = []
     for w in workers:
         rows = db.execute(
@@ -524,7 +577,8 @@ def recharge():
     db = get_db()
     n = 0
     for cid in ids:
-        if db.execute("SELECT 1 FROM users WHERE id=? AND role='customer'", (cid,)).fetchone():
+        if db.execute("SELECT 1 FROM users WHERE id=? AND role='customer' AND admin_id=?",
+                      (cid, _scope())).fetchone():
             services.add_tx(cid, amount, 'recharge', None, note, f'管理员{g.user["name"]}')
             n += 1
     db.commit()
@@ -537,7 +591,8 @@ def recharges():
     rows = get_db().execute(
         "SELECT t.id, t.delta_cents, t.note, t.created_at, u.name AS customer_name, u.phone "
         'FROM transactions t JOIN users u ON u.id=t.customer_id '
-        "WHERE t.kind='recharge' ORDER BY t.id DESC LIMIT 100").fetchall()
+        "WHERE t.kind='recharge' AND u.admin_id=? ORDER BY t.id DESC LIMIT 100",
+        (_scope(),)).fetchall()
     return jsonify(recharges=[dict(r) for r in rows])
 
 
@@ -564,7 +619,8 @@ def payout_preview():
 def payout():
     d = request.get_json(force=True, silent=True) or {}
     db = get_db()
-    w = db.execute("SELECT * FROM users WHERE id=? AND role='worker'", (d.get('worker_id'),)).fetchone()
+    w = db.execute("SELECT * FROM users WHERE id=? AND role='worker' AND admin_id=?",
+                   (d.get('worker_id'), _scope())).fetchone()
     if w is None:
         return jsonify(error='服务员不存在'), 400
     if not (d.get('from') and d.get('to')):
@@ -594,5 +650,5 @@ def payout():
 def payouts():
     rows = get_db().execute(
         'SELECT p.*, u.name AS worker_name FROM payouts p JOIN users u ON u.id=p.worker_id '
-        'ORDER BY p.id DESC LIMIT 100').fetchall()
+        'WHERE u.admin_id=? ORDER BY p.id DESC LIMIT 100', (_scope(),)).fetchall()
     return jsonify(payouts=[dict(r) for r in rows])
