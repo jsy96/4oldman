@@ -8,3 +8,5 @@ secrets.json
 scf_bundle.zip
 build_scf/
 cloudbase_run.zip
+cloudbase_fn.zip
+build_fn/
