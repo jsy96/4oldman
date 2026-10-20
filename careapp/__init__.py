@@ -1,13 +1,13 @@
 """颐养通 —— 居家养老服务管理平台 应用工厂。"""
 import os
 
-from flask import Flask, jsonify, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory
 
 from .db import BASE, close_db, init_db, load_config
 
 WEB_DIR = os.path.join(BASE, 'web')
 
-APP_VERSION = 'v1.0.261020-5'
+APP_VERSION = 'v1.0.261020-7'
 
 
 def create_app():
@@ -67,7 +67,13 @@ def create_app():
 
     @app.get('/')
     def index():
-        return send_from_directory(WEB_DIR, 'index.html')
+        # 云端挂在路由前缀下时（如 /eldercare），注入 <base> 让相对路径的 JS/CSS/API 走对
+        prefix = request.environ.get('SCRIPT_NAME', '')
+        with open(os.path.join(WEB_DIR, 'index.html'), encoding='utf-8') as f:
+            html = f.read()
+        if prefix and prefix != '/':
+            html = html.replace('<head>', f'<head>\n<base href="{prefix}/">', 1)
+        return html
 
     @app.get('/<path:p>')
     def assets(p):

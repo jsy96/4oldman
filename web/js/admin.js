@@ -79,7 +79,7 @@ const Admin = {
 
   async exportCsv(q) {
     try {
-      const res = await fetch('/api/a/stats/export.csv?' + q,
+      const res = await fetch(API.url('/api/a/stats/export.csv?' + q),
         { headers: { Authorization: 'Bearer ' + API.token } });
       if (!res.ok) throw new Error();
       const blob = await res.blob();

@@ -4,6 +4,7 @@
 
 ## 更新记录
 
+- **2026-10-20　v1.0.261020-7**　修复路由前缀下静态资源 404：网关调函数时会剥掉 `/eldercare` 前缀（函数无从得知挂载路径），改为**前端自适配**——首页内联脚本自动补尾斜杠，`API.url()` 按 `location` 推导前缀，静态引用全部改相对路径；服务端 `<base>` 注入保留（有 SCRIPT_NAME 的部署形态生效）。
 - **2026-10-20　v1.0.261020-5　🎉 正式上线**。最终架构：**微信云开发环境内事件云函数（Python3.9）+ HTTP 访问服务路由 + TDSQL-C MySQL 公网地址 + 高德骑行实测 + Open-Meteo 天气**。线上验收全通过：建库种子、三角色登录、下单、一键确认、路线（高德实测 4.21km/电量8.3%）、统计、HTTPS 首页。本轮踩坑修复：① 微信渠道函数走 TCB `CreateFunction`（SCF 端点与任何 Stamp 值均被拒）② 运行时 OpenSSL 1.0.2 → 钉 urllib3 1.26 ③ 密码哈希统一 pbkdf2（werkzeug 新版默认 scrypt 在老 OpenSSL 崩）④ MySQL 不支持 `CREATE INDEX IF NOT EXISTS` 与 TEXT 列建索引（时间列改 VARCHAR）⑤ HTTP 路由 API 结构 `Domain.Routes[]`、UpstreamResourceType='SCF'、追加式语义（已保护同环境 qm-admin 路由）⑥ 云函数连内网 172.17.x 超时 → 改用 TDSQL-C **外网地址**。部署入口：`.venv/Scripts/python.exe deploy_scf.py`（自动打包→建函数→建路由）。
 - **2026-10-20　v1.0.261020-4**　修复 HTTP 云函数创建失败根因：补 **`scf_bootstrap` 启动脚本**（zip 内带可执行权限、LF 行尾）。服务启动改为**数据库连不上不阻塞监听**（后台每 20 秒重试，错误堆栈进平台日志），保证健康检查通过。`deploy_scf.py` 重写为**全自动**：自动查云开发环境→打包→环境内建/更新函数→触发器→打印网址，密钥填好即可一条命令部署。
 - **2026-10-20　v1.0.261020-3**　适配 TCB **HTTP 云函数**：适配层自动剥除 URL 中的函数名路径前缀（`/eldercare/api/x` → `/api/x`），无需配置 STRIP_PREFIX 环境变量（仍保留该变量作兜底）；四种路径场景本地实测通过，`cloudbase_fn.zip` 已重打。

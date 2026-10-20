@@ -24,15 +24,15 @@ def _app():
 _KNOWN = ('/api', '/css', '/js', '/vendor', '/img')  # 应用真实路由前缀
 
 
-def _strip(path):
-    """优先用 STRIP_PREFIX；否则自动剥掉路径第一段（HTTP 云函数 URL 里的函数名前缀）。"""
+def _split(path):
+    """返回 (前缀, 剥离后路径)。优先 STRIP_PREFIX；否则自动识别函数名前缀。"""
     prefix = os.environ.get('STRIP_PREFIX', '')
     if prefix and path.startswith(prefix):
-        return path[len(prefix):] or '/'
+        return prefix, (path[len(prefix):] or '/')
     if path == '/' or any(path == k or path.startswith(k + '/') for k in _KNOWN):
-        return path
+        return '', path
     seg = path.split('/', 2)  # /eldercare/api/meta → ['', 'eldercare', 'api/meta']
-    return '/' + (seg[2] if len(seg) > 2 else '')
+    return '/' + (seg[1] if len(seg) > 1 else ''), '/' + (seg[2] if len(seg) > 2 else '')
 
 
 def main_handler(event, context):
@@ -40,7 +40,7 @@ def main_handler(event, context):
         return {'code': 1, 'msg': '请在控制台为该函数开启 HTTP 访问（云接入）后用网址调用'}
 
     method = (event.get('httpMethod') or 'GET').upper()
-    path = _strip(event.get('path') or '/')
+    prefix, path = _split(event.get('path') or '/')
     qs = event.get('queryStringParameters') or event.get('queryString') or {}
     query_string = urlencode(qs, doseq=True) if isinstance(qs, dict) else str(qs)
     headers = {str(k).lower(): str(v) for k, v in (event.get('headers') or {}).items()}
@@ -59,7 +59,7 @@ def main_handler(event, context):
 
     environ = {
         'REQUEST_METHOD': method,
-        'SCRIPT_NAME': '',
+        'SCRIPT_NAME': prefix,   # 保留前缀供页面注入 <base>，静态资源才能走对路径
         'PATH_INFO': path,
         'QUERY_STRING': query_string,
         'SERVER_NAME': headers.get('host', 'tcb'),
