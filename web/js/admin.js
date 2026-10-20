@@ -629,4 +629,101 @@ const Admin = {
     };
     reloadHis();
   },
+
+  /* ============ 行程检查（地图） ============ */
+  async renderMap(el) {
+    el.innerHTML = `
+      <div class="card">
+        <h3>行程检查 <span class="sub">逐个服务员检查时间安排是否合理 · 同一算法</span></h3>
+        <div class="row">
+          <input type="date" id="mc-date" value="${tomorrowStr()}" style="max-width:180px">
+          <button class="btn" id="mc-go">🔍 一键检查全部服务员</button>
+        </div>
+        <div class="muted small" style="margin-top:8px">
+          判定：两单间隔 ≥ 骑行时间 + 准备 ${CONF.schedule_buffer_min || 10} 分钟为「合理」；
+          不足骑行时间为「会迟到」。
+        </div>
+      </div>
+      <div id="mc-body"><div class="loading">选择日期后点击检查</div></div>`;
+    el.querySelector('#mc-go').onclick = () => Admin.loadSchedule(el);
+    Admin.loadSchedule(el);
+  },
+
+  async loadSchedule(el) {
+    const date = el.querySelector('#mc-date').value;
+    const body = el.querySelector('#mc-body');
+    if (!date) { toast('请选择日期'); return; }
+    body.innerHTML = '<div class="loading">逐人计算路线与间隔中…</div>';
+    try {
+      const d = await API.call(`/api/a/schedule-check?date=${date}`);
+      if (!d.workers.length) {
+        body.innerHTML = '<div class="empty">当天没有服务员行程</div>';
+        return;
+      }
+      const badge = st => st === 'ok' ? '<span class="chip green">合理</span>'
+        : st === 'tight' ? '<span class="chip amber">偏紧</span>' : '<span class="chip red">会迟到</span>';
+      body.innerHTML = d.workers.map((w, idx) => {
+        const c = w.check || {};
+        const legs = (c.legs || []).map(l => `
+          <div class="stop">
+            <div class="seq" style="background:${l.status === 'ok' ? 'var(--green)' : l.status === 'tight' ? 'var(--amber)' : 'var(--red)'}">${l.seq}</div>
+            <div class="body">
+              <div><b>${esc(l.from_label)} → ${esc(l.to_label)}</b> ${badge(l.status)}</div>
+              <div class="muted small">骑行 ${l.km} km · 预计 ${l.minutes} 分钟；两单间隔 ${l.available_min} 分钟
+                （建议 ≥ ${l.required_min} 分钟）</div>
+            </div>
+          </div>`).join('');
+        return `
+          <div class="card">
+            <h3>${esc(w.worker_name)}
+              ${c.reasonable ? '<span class="chip green">✅ 全部合理</span>'
+                : `<span class="chip red">迟到 ${c.late}</span> <span class="chip amber">偏紧 ${c.tight}</span>`}
+              <button class="btn btn-ghost btn-small" data-map="${idx}">🗺️ 查看地图</button>
+            </h3>
+            <div class="muted small" style="margin-bottom:6px">${w.stops.length} 单 · 总里程 ${w.total_km} km · ${esc(w.distance_source || '')}</div>
+            ${legs || '<div class="empty">当天只有一单，无分段检查</div>'}
+          </div>`;
+      }).join('');
+      body.querySelectorAll('[data-map]').forEach(b =>
+        b.onclick = () => Admin.showWorkerMap(d.workers[+b.dataset.map], d.date));
+    } catch (e) {
+      body.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+    }
+  },
+
+  showWorkerMap(w, date) {
+    openModal(`${w.worker_name} · ${date} 行程`, `
+      <div id="wm-map" class="map" style="height:380px"></div>
+      <div class="muted small" style="margin-top:8px">${esc(w.weather_note || '')}<br>
+        标注：≈骑行分钟 · 间隔 = 两单之间可用时间</div>`, {
+      okText: '关闭',
+      onMount() {
+        setTimeout(() => {
+          const map = Maps.create('wm-map');
+          const pts = [];
+          (w.markers || []).forEach(m => {
+            pts.push([m.lat, m.lng]);
+            L.marker([m.lat, m.lng], { icon: Maps.pin(m.home ? '🏠' : m.seq, m.home ? 'home' : '') })
+              .addTo(map)
+              .bindPopup(m.home ? '驻地'
+                : `<b>${m.seq}. ${esc(m.customer)}</b><br>${esc(m.item || '')}<br>${esc(m.address || '')}`);
+          });
+          if (pts.length > 1) L.polyline(pts, { color: '#2563eb', weight: 4, dashArray: '8 8' }).addTo(map);
+          ((w.check || {}).legs || []).forEach(l => {
+            if (l.from_lat == null) return;
+            L.marker([(l.from_lat + l.to_lat) / 2, (l.from_lng + l.to_lng) / 2], {
+              icon: L.divIcon({
+                className: '',
+                html: `<div class="leg-label">≈${l.minutes}分 · 间隔${l.available_min}分</div>`,
+                iconSize: [0, 0],
+              }),
+              interactive: false,
+            }).addTo(map);
+          });
+          if (pts.length) map.fitBounds(pts, { padding: [30, 30] });
+          Maps.refresh();
+        }, 80);
+      },
+    });
+  },
 };

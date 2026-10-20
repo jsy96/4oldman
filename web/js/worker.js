@@ -196,7 +196,9 @@ const Worker = {
           <div class="muted small">距离来源：${esc(plan.distance_source || '直线×1.35估算')}</div>
           <div class="muted small">午餐预留 ${esc(plan.lunch.start)}-${esc(plan.lunch.end)}${plan.lunch.used ? '（已自动避开）' : ''}</div>
           ${plan.warnings.length ? `<div class="warn-box">${plan.warnings.map(esc).join('<br>')}</div>` : ''}
+          <button class="btn btn-plain" id="rt-check-btn" style="margin-top:10px">🔍 一键检查时间安排是否合理</button>
         </div>
+        <div id="rt-check"></div>
       </div>
       <div>
         <div class="card" style="padding:8px"><div id="rt-map" class="map" style="height:320px"></div></div>
@@ -216,6 +218,8 @@ const Worker = {
             </div>`).join('') : '<div class="empty">当天暂无已确认订单</div>'}
         </div>
       </div>`;
+    const checkBtn = body.querySelector('#rt-check-btn');
+    if (checkBtn) checkBtn.onclick = () => Worker.renderCheck(plan);
     if ((plan.markers || []).length) {
       setTimeout(() => {
         if (!document.getElementById('rt-map')) return;  // 用户已切换页面
@@ -229,9 +233,51 @@ const Worker = {
               : `<b>${m.seq}. ${esc(m.customer)}</b><br>${esc(m.item)}<br>${esc(m.address)}`);
         });
         if (pts.length > 1) L.polyline(pts, { color: '#2563eb', weight: 4, dashArray: '8 8' }).addTo(map);
+        // 每段路标注：预计骑行时间 / 两单预留间隔
+        (plan.legs || []).forEach(l => {
+          if (l.from_lat == null) return;
+          L.marker([(l.from_lat + l.to_lat) / 2, (l.from_lng + l.to_lng) / 2], {
+            icon: L.divIcon({
+              className: '',
+              html: `<div class="leg-label">≈${l.minutes}分 · 间隔${l.available_min}分</div>`,
+              iconSize: [0, 0],
+            }),
+            interactive: false,
+          }).addTo(map);
+        });
         map.fitBounds(pts, { padding: [30, 30] });
       }, 60);
     }
+  },
+
+  renderCheck(plan) {
+    const box = document.getElementById('rt-check');
+    if (!box) return;
+    const c = plan.check;
+    if (!c || !c.legs.length) {
+      box.innerHTML = '<div class="card"><div class="empty">当天不足两单，无需检查间隔</div></div>';
+      return;
+    }
+    const badge = st => st === 'ok' ? '<span class="chip green">合理</span>'
+      : st === 'tight' ? '<span class="chip amber">偏紧</span>' : '<span class="chip red">会迟到</span>';
+    box.innerHTML = `
+      <div class="card">
+        <h3>时间安排检查 ${c.reasonable
+          ? '<span class="chip green">✅ 全部合理</span>'
+          : `<span class="chip red">迟到 ${c.late} 段</span> <span class="chip amber">偏紧 ${c.tight} 段</span>`}</h3>
+        ${c.legs.map(l => `
+          <div class="stop">
+            <div class="seq" style="background:${l.status === 'ok' ? 'var(--green)' : l.status === 'tight' ? 'var(--amber)' : 'var(--red)'}">${l.seq}</div>
+            <div class="body">
+              <div><b>${esc(l.from_label)} → ${esc(l.to_label)}</b> ${badge(l.status)}</div>
+              <div class="muted small">骑行 ${l.km} km · 预计 ${l.minutes} 分钟；两单间隔 ${l.available_min} 分钟
+                （建议 ≥ ${l.required_min} 分钟 = 骑行 ${l.minutes} + 准备 ${c.buffer_min}）</div>
+              ${l.status === 'late' ? '<div class="warn-box" style="margin:6px 0 0">间隔不足，建议调整预约时间或减少当日单量</div>' : ''}
+              ${l.status === 'tight' ? '<div class="warn-box" style="margin:6px 0 0">间隔偏紧，雨雪天气可能来不及</div>' : ''}
+            </div>
+          </div>`).join('')}
+      </div>`;
+    box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   },
 
   async renderCustomers(el) {

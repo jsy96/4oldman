@@ -125,11 +125,13 @@ def plan_route(worker, orders, conf, date_str):
     lunch_e = d.replace(hour=le_h, minute=le_m)
 
     factor, total_km = conf['road_factor'], 0.0
+    buffer_min = int(conf.get('schedule_buffer_min', 10))  # 骑行之外需预留的准备时间
     weather_factor = speeds['dry'] / speed if speed < speeds['dry'] else 1.0  # 恶劣天气放大耗时
     # 按预约时间排序（预约是承诺，不按地理位置重排）；地理只用于估算相邻两单路程
     ordered = sorted(valid, key=lambda o: o['sched_start'])
     prev, lunch_used = start, False
     amap_legs = 0
+    prev_label = start_name
     markers = [dict(lat=start[0], lng=start[1], seq='🏠', home=True, customer=start_name)]
     for k, o in enumerate(ordered):
         pt = (o['lat'], o['lng'])
@@ -141,8 +143,17 @@ def plan_route(worker, orders, conf, date_str):
             leg_min = max(3, round(ride[1] / 60 * weather_factor))
             amap_legs += 1
         total_km += km
-        arrive = clock + timedelta(minutes=leg_min)
         sched = datetime.strptime(o['sched_start'], '%Y-%m-%d %H:%M')
+        # 时间安排合理性：从上一站出发到本单预约开始，实际可用间隔 vs 所需（骑行+准备）
+        available_min = int((sched - clock).total_seconds() // 60)
+        required_min = leg_min + buffer_min
+        if available_min < leg_min:
+            check_status = 'late'
+        elif available_min < required_min:
+            check_status = 'tight'
+        else:
+            check_status = 'ok'
+        arrive = clock + timedelta(minutes=leg_min)
         svc_start = max(arrive, sched)
         late_min = int((svc_start - sched).total_seconds() // 60)
         if late_min > 15:
@@ -154,7 +165,12 @@ def plan_route(worker, orders, conf, date_str):
         depart, hit = _apply_lunch(svc_start, o['minutes'], lunch_s, lunch_e)
         if hit:
             lunch_used = True
-        legs.append(dict(seq=k + 1, km=round(km, 2), minutes=leg_min))
+        legs.append(dict(seq=k + 1, km=round(km, 2), minutes=leg_min,
+                         from_lat=prev[0], from_lng=prev[1], to_lat=pt[0], to_lng=pt[1],
+                         from_label=prev_label, to_label=o['customer_name'],
+                         available_min=available_min, required_min=required_min,
+                         status=check_status))
+        prev_label = o['customer_name']
         markers.append(dict(lat=pt[0], lng=pt[1], seq=k + 1,
                             customer=o['customer_name'], item=o['item_name'],
                             address=o.get('customer_address') or o.get('address') or ''))
@@ -184,8 +200,16 @@ def plan_route(worker, orders, conf, date_str):
     battery = dict(capacity_wh=bat_conf['capacity_wh'], wh_per_km=round(wh_per_km, 1),
                    use_wh=round(use_wh), use_pct=round(use_pct, 1), temp_avg=round(tavg, 1), note=bat_note)
 
+    check = dict(
+        buffer_min=buffer_min,
+        legs=legs,
+        ok=sum(1 for l in legs if l['status'] == 'ok'),
+        tight=sum(1 for l in legs if l['status'] == 'tight'),
+        late=sum(1 for l in legs if l['status'] == 'late'),
+        reasonable=all(l['status'] == 'ok' for l in legs),
+    )
     return dict(date=date_str, start_name=start_name, start=start, stops=stops_out, legs=legs,
-                markers=markers,
+                check=check, markers=markers,
                 distance_source=('高德骑行实测' if amap_legs == len(ordered) and amap_legs
                                  else f'高德骑行/直线混合({amap_legs}/{len(ordered)})' if amap_legs
                                  else '直线×1.35估算'),

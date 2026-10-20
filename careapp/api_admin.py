@@ -10,6 +10,7 @@ from werkzeug.security import generate_password_hash
 from .auth import auth_required
 from .db import HASH_METHOD, get_db, insert_returning_id
 from . import amap, services
+from .ai import plan_route
 from flask import current_app
 
 bp = Blueprint('admin', __name__, url_prefix='/api/a')
@@ -418,6 +419,43 @@ def resolve(oid):
 
 
 # ---------- 统计与导出 ----------
+
+@bp.get('/schedule-check')
+@auth_required('admin')
+def schedule_check():
+    """逐个服务员检查当天时间安排是否合理（与服务员端同一算法）。"""
+    day = request.args.get('date') or (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
+    try:
+        datetime.strptime(day, '%Y-%m-%d')
+    except ValueError:
+        return jsonify(error='日期格式不正确'), 400
+    db = get_db()
+    if request.args.get('worker_id'):
+        workers = db.execute("SELECT * FROM users WHERE id=? AND role='worker'",
+                             (request.args['worker_id'],)).fetchall()
+    else:
+        workers = db.execute("SELECT * FROM users WHERE role='worker' AND active=1 "
+                             'ORDER BY name').fetchall()
+    out = []
+    for w in workers:
+        rows = db.execute(
+            "SELECT o.*, si.name AS item_name, o.duration_minutes AS minutes, "
+            'uc.name AS customer_name, uc.phone AS customer_phone, '
+            'uc.address AS customer_address, uc.lat, uc.lng '
+            'FROM orders o JOIN service_items si ON si.id=o.item_id '
+            'JOIN users uc ON uc.id=o.customer_id WHERE o.worker_id=? AND '
+            "substr(o.sched_start,1,10)=? AND o.status IN ('pending','confirmed','completed') "
+            'ORDER BY o.sched_start', (w['id'], day)).fetchall()
+        if not rows:
+            continue
+        plan = plan_route(dict(w), [dict(r) for r in rows], current_app.config['APP_CONF'], day)
+        out.append(dict(worker_id=w['id'], worker_name=w['name'],
+                        check=plan.get('check'), markers=plan.get('markers'),
+                        stops=plan.get('stops'), weather_note=plan.get('weather_note'),
+                        distance_source=plan.get('distance_source'),
+                        total_km=plan.get('total_km')))
+    return jsonify(date=day, workers=out)
+
 
 @bp.get('/stats')
 @auth_required('admin')

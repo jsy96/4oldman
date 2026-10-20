@@ -16,6 +16,7 @@
   "speed_kmh": { "dry": 15, "rain": 12, "snow": 10 },
   "road_factor": 1.35,
   "conflict_buffer_min": 30,
+  "schedule_buffer_min": 10,
   "battery": {
     "capacity_wh": 960,
     "wh_per_km_base": 16,

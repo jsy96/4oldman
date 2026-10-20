@@ -118,6 +118,19 @@ route = call('get', f'/api/w/route?date={tomorrow}', w1)
 assert route['stops'] and route['battery'] and route['total_km'] > 0
 assert route['lunch']['start'] == '11:30'
 t('AI 行程路线（排序/耗时/电量/午餐）')
+
+# 时间安排合理性检查：每段带 可用间隔/所需时间/判定
+assert 'check' in route and route['check']['legs'], route.get('check')
+for leg in route['check']['legs']:
+    assert leg['status'] in ('ok', 'tight', 'late')
+    assert leg['available_min'] is not None and leg['required_min'] >= leg['minutes']
+t('服务员行程时间合理性检查（逐段间隔判定）')
+
+# 管理端逐个检查所有服务员（同一算法）
+sc = call('get', f'/api/a/schedule-check?date={tomorrow}', admin)
+assert sc['workers'], '应有服务员行程'
+assert all('check' in w and 'markers' in w for w in sc['workers'])
+t('管理员逐人行程检查（含地图标记数据）')
 if route['weather']:
     t('Open-Meteo 天气已接入')
 

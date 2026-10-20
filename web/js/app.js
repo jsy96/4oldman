@@ -21,7 +21,8 @@ const ROLE_TEXT = { admin: '管理员', worker: '服务员', customer: '顾客' 
 const NAV = {
   customer: [['orders', '📋', '订单历史'], ['book', '➕', '预约服务'], ['money', '💰', '账户明细'], ['me', '👤', '我的']],
   worker: [['todo', '✅', '今日待办'], ['orders', '🗓️', '订单'], ['route', '🗺️', '行程路线'], ['customers', '👪', '我的顾客']],
-  admin: [['stats', '📊', '统计'], ['orders', '🧾', '订单'], ['users', '👥', '人员'], ['items', '🧺', '项目'], ['recharge', '💰', '充值'], ['payout', '💵', '酬金']],
+  admin: [['stats', '📊', '统计'], ['orders', '🧾', '订单'], ['map', '🗺️', '行程检查'],
+    ['users', '👥', '人员'], ['items', '🧺', '项目'], ['recharge', '💰', '充值'], ['payout', '💵', '酬金']],
 };
 const RENDER = {
   customer: { orders: el => Customer.renderOrders(el), book: el => Customer.renderBook(el),
@@ -29,8 +30,9 @@ const RENDER = {
   worker: { todo: el => Worker.renderTodo(el), orders: el => Worker.renderOrders(el),
     route: el => Worker.renderRoute(el), customers: el => Worker.renderCustomers(el) },
   admin: { stats: el => Admin.renderStats(el), orders: el => Admin.renderOrders(el),
-    users: el => Admin.renderUsers(el), items: el => Admin.renderItems(el),
-    recharge: el => Admin.renderRecharge(el), payout: el => Admin.renderPayout(el) },
+    map: el => Admin.renderMap(el), users: el => Admin.renderUsers(el),
+    items: el => Admin.renderItems(el), recharge: el => Admin.renderRecharge(el),
+    payout: el => Admin.renderPayout(el) },
 };
 
 /* ---------- 提示 ---------- */

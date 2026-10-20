@@ -7,7 +7,7 @@ from .db import BASE, close_db, init_db, load_config
 
 WEB_DIR = os.path.join(BASE, 'web')
 
-APP_VERSION = 'v1.0.261020-15'
+APP_VERSION = 'v1.0.261020-16'
 
 
 def create_app():
@@ -53,7 +53,9 @@ def create_app():
     def meta():
         conf = app.config['APP_CONF']
         return jsonify(version=APP_VERSION, app_name=conf['app_name'], app_sub=conf['app_sub'],
-                       map=conf['map'], lunch=conf['lunch'], work_hours=conf['work_hours'])
+                       map=conf['map'], lunch=conf['lunch'], work_hours=conf['work_hours'],
+                       schedule_buffer_min=conf.get('schedule_buffer_min', 10),
+                       conflict_buffer_min=conf.get('conflict_buffer_min', 30))
 
     @app.get('/api/health')
     def health():
