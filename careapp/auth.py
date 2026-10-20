@@ -100,7 +100,9 @@ def send_code():
     if user is not None and not user['active']:
         return jsonify(error='账号已停用，请联系管理员'), 403
     if user is None:
-        # 不暴露手机号是否注册
+        if scene == 'reset':
+            # 按业务要求：未注册手机号直接提示，且不发短信
+            return jsonify(error='该手机号尚未注册'), 400
         return jsonify(ok=True, message='若该手机号已注册，验证码将发送')
     now_epoch = int(time.time())
     last = db.execute('SELECT created_at FROM sms_codes WHERE phone=? AND scene=? '

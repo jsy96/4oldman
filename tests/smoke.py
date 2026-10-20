@@ -304,6 +304,10 @@ c2_tok = login('13700000002', '123456')
 sent = call('post', '/api/auth/send-code', data={'phone': '13700000002', 'scene': 'reset'})
 assert sent.get('debug_code'), sent
 t('短信验证码发送（调试模式）')
+unreg = call('post', '/api/auth/send-code',
+             data={'phone': '19999999999', 'scene': 'reset'}, expect=400)
+assert '尚未注册' in unreg.get('error', ''), unreg
+t('未注册手机号提示且不发验证码')
 call('post', '/api/auth/send-code', data={'phone': '13700000002', 'scene': 'reset'}, expect=429)
 t('验证码发送频率限制（60秒）')
 call('post', '/api/auth/reset-password',
