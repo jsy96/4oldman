@@ -139,12 +139,18 @@ const Worker = {
     const list = el.querySelector('#wk-list');
     const { orders } = await API.call(`/api/w/orders?scope=${scope}`);
     if (!orders.length) { list.innerHTML = '<div class="empty">没有订单</div>'; return; }
-    let lastDate = '';
+    let lastDate = '', groupIdx = 0;
     list.innerHTML = orders.map(o => {
       const d = o.sched_start.slice(0, 10);
-      const head = d !== lastDate ? `<div class="date-group">${d === todayStr() ? '今天 · ' : ''}${d}</div>` : '';
-      lastDate = d;
-      return head + Worker.orderCard(o);
+      let head = '';
+      if (d !== lastDate) {
+        groupIdx += 1;
+        head = `<div class="date-group">${d === todayStr() ? '今天 · ' : ''}${d}</div>`;
+        lastDate = d;
+      }
+      const card = Worker.orderCard(o).replace('class="card order-card',
+                                               `class="card order-card${groupIdx % 2 ? ' date-alt' : ''}`);
+      return head + card;
     }).join('');
     Worker.wireOrderButtons(list, () => Worker.renderOrders(el, scope));
   },

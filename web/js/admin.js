@@ -139,8 +139,11 @@ const Admin = {
     const reload = () => Admin.loadOrderList(box, q);
     box.innerHTML = `<div class="tblwrap"><table class="tbl">
       <tr><th>预约时间</th><th>顾客</th><th>服务员</th><th>项目</th><th>金额</th><th>状态</th><th>操作</th></tr>
-      ${orders.map(o => `
-        <tr>
+      ${(() => { let alt = false, lastDate = null; return orders.map(o => {
+        const d = o.sched_start.slice(0, 10);
+        if (d !== lastDate) { alt = !alt; lastDate = d; }
+        return `
+        <tr class="${alt ? 'date-alt' : ''}">
           <td>${esc(o.sched_start)}<br><span class="muted small">#${o.id}</span></td>
           <td>${esc(o.customer_name)}</td><td>${esc(o.worker_name)}</td>
           <td>${esc(o.item_name)}</td>
@@ -154,7 +157,7 @@ const Admin = {
             ${o.status !== 'cancelled' && o.status !== 'completed' ? `<button class="btn btn-danger btn-small" data-resolve="${o.id}" data-act="cancel_refund">取消退款</button>` : ''}
             <button class="btn btn-plain btn-small" data-logs="${o.id}">日志</button>
           </div></td>
-        </tr>`).join('')}
+        </tr>`; }).join('')})()}
     </table></div>`;
     box.querySelectorAll('[data-reschedule]').forEach(b => b.onclick = () => {
       const cur = b.dataset.cur.replace(' ', 'T');

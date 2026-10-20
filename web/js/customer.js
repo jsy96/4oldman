@@ -5,15 +5,20 @@ const Customer = {
     el.innerHTML = '<div class="loading">加载中…</div>';
     const { orders } = await API.call('/api/c/orders');
     if (!orders.length) { el.innerHTML = '<div class="empty">还没有订单，去“预约服务”下一单吧</div>'; return; }
-    el.innerHTML = orders.map(o => `
-      <div class="card order-card ${o.status}">
+    let alt = false, lastDate = null;
+    el.innerHTML = orders.map(o => {
+      const d = o.sched_start.slice(0, 10);
+      if (d !== lastDate) { alt = !alt; lastDate = d; }  // 换日期翻一次底色
+      return `
+      <div class="card order-card ${o.status}${alt ? ' date-alt' : ''}">
         <div class="head"><span class="time">${esc(o.sched_start)}</span>${chip(o.status)}</div>
         <div class="who">${esc(o.item_name)} <span class="muted small">¥${fmtMoney(o.price_cents)}</span></div>
         <div class="meta">服务员：${esc(o.worker_name)} · ${o.minutes}分钟</div>
         ${o.exception_type ? `<div class="warn-box">异常：${esc(o.exception_type)} ${esc(o.exception_note || '')}</div>` : ''}
         ${o.note ? `<div class="meta">备注：${esc(o.note)}</div>` : ''}
         ${['pending', 'confirmed'].includes(o.status) ? `<button class="btn btn-plain btn-small" data-cancel="${o.id}">取消预约</button>` : ''}
-      </div>`).join('');
+      </div>`;
+    }).join('');
     el.querySelectorAll('[data-cancel]').forEach(b => b.onclick = async () => {
       if (!confirm('确定取消这个预约吗？')) return;
       try {
