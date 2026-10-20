@@ -279,6 +279,9 @@ c2 = call('post', '/api/a/users', admin2,
 assert any(u['id'] == w2['id'] for u in call('get', '/api/a/users?role=worker', admin)['users'])
 assert any(u['id'] == c2['id'] for u in call('get', '/api/a/users?role=customer', admin)['users'])
 assert len(call('get', '/api/a/users?role=worker', admin2)['users']) == 1
+admins_seen = call('get', '/api/a/users?role=admin', admin)['users']
+assert all(not a.get('is_super') for a in admins_seen), '管理员列表不应包含超级管理员自己'
+assert any(a['id'] == new_admin['id'] for a in admins_seen)
 # 超级管理员可指定员工归属哪个管理员
 w3 = call('post', '/api/a/users', admin,
           data={'role': 'worker', 'phone': '13700000003', 'name': '超管分配的员工',

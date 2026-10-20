@@ -81,8 +81,9 @@ def users():
     elif role == 'admin':
         if not _is_super():
             return jsonify(error='仅超级管理员可查看管理员列表'), 403
+        # 超级管理员是特殊唯一账号，不在人员管理中展示自己
         rows = db.execute("SELECT id, phone, name, active, is_super, created_at "
-                          "FROM users WHERE role='admin' ORDER BY id").fetchall()
+                          "FROM users WHERE role='admin' AND is_super=0 ORDER BY id").fetchall()
     else:
         rows = db.execute("SELECT id, phone, name, role, active FROM users" +
                           ('' if _is_super() else ' WHERE admin_id=?') +
