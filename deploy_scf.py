@@ -1,4 +1,4 @@
-"""全自动部署到腾讯云开发环境（HTTP 云函数），无需打开控制台。
+"""一键部署到腾讯云开发环境（HTTP 云函数）：打包 → 原地更新 → 路由 → 刷新 CDN。
 
 用法：
   .venv/Scripts/python.exe deploy_scf.py            # 自动找环境（唯一/ajmj环境时）
@@ -24,6 +24,9 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 BASE = os.path.dirname(os.path.abspath(__file__))
 REGIONS = ['ap-shanghai', 'ap-guangzhou', 'ap-beijing', 'ap-chengdu', 'ap-nanjing', 'ap-hongkong']
 SCF_VERSION = '2018-04-16'
+TCB_VERSION = '2018-06-08'
+MEMORY_MB = 512
+TIMEOUT_S = 60
 
 
 def load_secrets():
@@ -36,8 +39,8 @@ def scf_region(r):
 
 
 def tc3_call(action, payload, sid, skey, region, service='scf', version=SCF_VERSION, host=None):
-    """腾讯云 API TC3 签名直调。service: scf / tcb。"""
-    host = host or (f'{service}.{region}.tencentcloudapi.com' if service == 'scf'
+    """腾讯云 API TC3 签名直调。service: scf / tcb / cdn。"""
+    host = host or (f'{service}.{region}.tencentcloudapi.com' if service != 'tcb'
                     else 'tcb.tencentcloudapi.com')
     url = f'https://{host}'
     ts = int(time.time())
@@ -129,13 +132,15 @@ def main():
     ns = env['id']
     print(f'目标：环境 {ns} @ {region}，函数 {args.name}')
 
-    # 打包
+    # 1) 打包
     sys.path.insert(0, BASE)
     import pack_fn
     pack_fn.main()
     code_b64 = base64.b64encode(open(os.path.join(BASE, 'cloudbase_fn.zip'), 'rb').read()).decode()
 
     call = lambda action, payload: tc3_call(action, payload, sid, skey, region)
+    tcb_call = lambda action, payload: tc3_call(action, payload, sid, skey, region,
+                                                 service='tcb', version=TCB_VERSION)
 
     def get_status():
         try:
@@ -143,63 +148,96 @@ def main():
         except RuntimeError:
             return None
 
-    # 4) TCB：创建 HTTP 访问服务路由（默认域名 + 路径 = 函数名）
-    print('创建 HTTP 访问路由 ...')
-    try:
-        tc3_call('CreateHTTPServiceRoute', {
-            'EnvId': ns,
-            'Domain': {'DomainId': '', 'Domain': ''},
-            'Path': '/' + args.name,
-            'Name': args.name,
-            'Methods': ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD'],
-            'TargetList': [{'Type': 'scf', 'TargetName': args.name}],
-        }, sid, skey, region, service='tcb', version='2018-06-08')
-        print('路由创建成功')
-    except RuntimeError as e:
-        if 'exists' in str(e) or 'Exist' in str(e) or '已存在' in str(e):
-            print('路由已存在，跳过')
-        else:
-            print(f'[路由] 未成功（{e}），可在控制台 HTTP 访问/云接入 手动添加路径 /{args.name}')
+    def wait_active(limit=40):
+        st = None
+        for _ in range(limit):
+            st = get_status()
+            if st == 'Active' or (st and 'Failed' in st):
+                return st
+            time.sleep(5)
+        return st
+
+    # 2) 函数：已存在则原地更新代码与配置；失败残留则删除重建
     status = get_status()
-    if status:
-        print(f'函数已存在（{status}）→ 删除重建 ...')
+    if status and 'Failed' in status:
+        print(f'函数处于 {status}（失败残留）→ 删除重建 ...')
         call('DeleteFunction', {'FunctionName': args.name, 'Namespace': ns})
         for _ in range(12):
             time.sleep(5)
             if get_status() is None:
                 break
-        else:
-            sys.exit('删除超时，请 1 分钟后重跑')
+        status = None
 
-    # 云开发环境的函数必须走 TCB 接口创建：EnvId + Type=HTTP，且不能传 Stamp（实测矩阵验证）
-    print('通过云开发接口创建 HTTP 云函数 ...')
-    resp = tc3_call('CreateFunction', {
-        'FunctionName': args.name, 'EnvId': ns,
-        'Type': 'HTTP', 'Runtime': 'Python3.9',
-        'Handler': 'index.main_handler', 'MemorySize': 256, 'Timeout': 60,
-        'CodeSource': 'ZipFile', 'Code': {'ZipFile': code_b64},
-    }, sid, skey, region, service='tcb', version='2018-06-08')
-    if resp.get('SCFErrorCode'):
-        sys.exit(f"[创建失败] {resp['SCFErrorCode']}: {resp['SCFErrorMsg']}")
-
-    # 等待构建完成
-    for i in range(20):
-        time.sleep(5)
-        st = get_status()
-        print(f'  状态：{st}')
-        if st == 'Active':
-            break
-        if st and 'Failed' in st:
-            sys.exit(f'构建失败（{st}）：控制台 → 云函数 {args.name} → 日志 查看原因')
+    if status:
+        print(f'函数已存在（{status}）→ 原地更新代码 ...')
+        wait_active()
+        call('UpdateFunctionCode', {'FunctionName': args.name, 'Namespace': ns, 'ZipFile': code_b64})
+        st = wait_active()
+        call('UpdateFunctionConfiguration', {'FunctionName': args.name, 'Namespace': ns,
+                                             'MemorySize': MEMORY_MB, 'Timeout': TIMEOUT_S})
+        st = wait_active()
+        if st != 'Active':
+            sys.exit(f'[更新失败] 函数状态 {st}')
+        print(f'代码已更新（{MEMORY_MB}MB / {TIMEOUT_S}s）')
     else:
-        print('  （等待超时，可稍后用 --list 或控制台查看状态）')
-    print('函数已就位')
+        print('创建 HTTP 云函数 ...')
+        resp = tcb_call('CreateFunction', {
+            'FunctionName': args.name, 'EnvId': ns,
+            'Type': 'HTTP', 'Runtime': 'Python3.9',
+            'Handler': 'index.main_handler', 'MemorySize': MEMORY_MB, 'Timeout': TIMEOUT_S,
+            'CodeSource': 'ZipFile', 'Code': {'ZipFile': code_b64},
+        })
+        if resp.get('SCFErrorCode'):
+            sys.exit(f"[创建失败] {resp['SCFErrorCode']}: {resp['SCFErrorMsg']}")
+        st = wait_active()
+        if st != 'Active':
+            sys.exit(f'[创建失败] 函数状态 {st}')
+        print('函数创建完成')
+
+    # 3) 路由：默认域名 /函数名；leige.online 的 / 与 /函数名（追加式，不动其它路由）
+    def ensure_route(domain, path):
+        try:
+            tcb_call('CreateHTTPServiceRoute', {
+                'EnvId': ns,
+                'Domain': {'Domain': domain, 'Routes': [{
+                    'Path': path, 'UpstreamResourceType': 'SCF',
+                    'UpstreamResourceName': args.name,
+                    'Enable': True, 'EnableAuth': False, 'EnableSafeDomain': True,
+                    'EnablePathTransmission': False, 'PathRewrite': {}, 'QPSPolicy': {},
+                }]},
+            })
+            print(f'  路由已新增：{domain}{path}')
+        except RuntimeError as e:
+            if 'exist' in str(e).lower() or '已存在' in str(e):
+                return
+            print(f'  [路由] {domain}{path} 未成功：{str(e)[:90]}')
+
+    default_dom = ''
+    try:
+        routes = tcb_call('DescribeHTTPServiceRoute', {'EnvId': ns})
+        default_dom = next((d['Domain'] for d in routes.get('Domains', []) if d.get('IsDefault')), '')
+        if default_dom:
+            ensure_route(default_dom, '/' + args.name)
+        ensure_route('leige.online', '/')
+        ensure_route('leige.online', '/' + args.name)
+    except RuntimeError as e:
+        print(f'[路由] 查询失败：{str(e)[:90]}')
+
+    # 4) 刷新 CDN 首页缓存（静态资源靠 ?v= 版本号自动更新）
+    try:
+        tc3_call('PurgeUrlsCache',
+                 {'Urls': ['https://leige.online/', 'https://leige.online/index.html']},
+                 sid, skey, '', service='cdn', version='2018-06-06',
+                 host='cdn.tencentcloudapi.com')
+        print('CDN 首页缓存已刷新')
+    except Exception as e:
+        print(f'[CDN] 刷新未成功：{str(e)[:90]}')
 
     print(f'''
-完成！访问网址（其一可用）：
-  https://{ns}.{region}.tcb.qcloud.la/{args.name}
-
-首次访问 3-10 秒（连库建表+演示数据），之后秒开。''')
+完成！访问网址：
+  https://leige.online/
+  https://{default_dom}/{args.name}''')
+    print('暖启动接口约 0.2 秒；闲置后首次访问 1~3 秒属正常冷启动。')
 
 
 if __name__ == '__main__':
