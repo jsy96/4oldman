@@ -8,7 +8,7 @@ from flask import Blueprint, g, jsonify, request, Response
 from werkzeug.security import generate_password_hash
 
 from .auth import auth_required
-from .db import get_db, insert_returning_id
+from .db import HASH_METHOD, get_db, insert_returning_id
 from . import amap, services
 from flask import current_app
 
@@ -79,7 +79,7 @@ def create_user():
     uid = insert_returning_id(
         db, 'INSERT INTO users(phone,password_hash,role,name,address,lat,lng,worker_id,created_at) '
             'VALUES(?,?,?,?,?,?,?,?,?)',
-        (p['phone'], generate_password_hash(p['password']), d['role'], p['name'],
+        (p['phone'], generate_password_hash(p['password'], method=HASH_METHOD), d['role'], p['name'],
          p['address'], p['lat'], p['lng'], p['worker_id'], services.now_str()))
     db.commit()
     return jsonify(ok=True, id=uid)
@@ -107,7 +107,7 @@ def update_user(uid):
         if len(p['password']) < 6:
             return jsonify(error='密码至少 6 位'), 400
         sets.append('password_hash=?')
-        params.append(generate_password_hash(p['password']))
+        params.append(generate_password_hash(p['password'], method=HASH_METHOD))
     if 'active' in d and row['id'] != g.user['id']:  # 不能停用自己
         sets.append('active=?')
         params.append(1 if d['active'] else 0)

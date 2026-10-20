@@ -4,6 +4,7 @@
 
 ## 更新记录
 
+- **2026-10-20　v1.0.261020-5　🎉 正式上线**。最终架构：**微信云开发环境内事件云函数（Python3.9）+ HTTP 访问服务路由 + TDSQL-C MySQL 公网地址 + 高德骑行实测 + Open-Meteo 天气**。线上验收全通过：建库种子、三角色登录、下单、一键确认、路线（高德实测 4.21km/电量8.3%）、统计、HTTPS 首页。本轮踩坑修复：① 微信渠道函数走 TCB `CreateFunction`（SCF 端点与任何 Stamp 值均被拒）② 运行时 OpenSSL 1.0.2 → 钉 urllib3 1.26 ③ 密码哈希统一 pbkdf2（werkzeug 新版默认 scrypt 在老 OpenSSL 崩）④ MySQL 不支持 `CREATE INDEX IF NOT EXISTS` 与 TEXT 列建索引（时间列改 VARCHAR）⑤ HTTP 路由 API 结构 `Domain.Routes[]`、UpstreamResourceType='SCF'、追加式语义（已保护同环境 qm-admin 路由）⑥ 云函数连内网 172.17.x 超时 → 改用 TDSQL-C **外网地址**。部署入口：`.venv/Scripts/python.exe deploy_scf.py`（自动打包→建函数→建路由）。
 - **2026-10-20　v1.0.261020-4**　修复 HTTP 云函数创建失败根因：补 **`scf_bootstrap` 启动脚本**（zip 内带可执行权限、LF 行尾）。服务启动改为**数据库连不上不阻塞监听**（后台每 20 秒重试，错误堆栈进平台日志），保证健康检查通过。`deploy_scf.py` 重写为**全自动**：自动查云开发环境→打包→环境内建/更新函数→触发器→打印网址，密钥填好即可一条命令部署。
 - **2026-10-20　v1.0.261020-3**　适配 TCB **HTTP 云函数**：适配层自动剥除 URL 中的函数名路径前缀（`/eldercare/api/x` → `/api/x`），无需配置 STRIP_PREFIX 环境变量（仍保留该变量作兜底）；四种路径场景本地实测通过，`cloudbase_fn.zip` 已重打。
 - **2026-10-20　v1.0.261020-2**　新增**环境内「云函数」部署方案**（每个云开发环境必有云函数，不依赖控制台是否有云托管）：`index.py` WSGI 适配层把 HTTP 访问事件转交 Flask（本地已实测 meta/登录/静态页/路径前缀剥离四项）；`pack_fn.py` 打包含 Linux 依赖的 `cloudbase_fn.zip`。
@@ -136,6 +137,18 @@ uv pip install --python .venv/Scripts/python.exe -r requirements.txt
 | 强行上 Vercel/CF | 大 | 需换云数据库并重写数据层，前端静态部分可放 CF Pages——不推荐 |
 
 **云数据库选型（国内访问优先）**：本应用数据量小（单店日均几十单）。**腾讯云内用户推荐：云函数 SCF + 腾讯云 MySQL（同区内网）**，延迟 <3ms；本地/轻量服务器用户直接用 SQLite 零改造。海外免费库（Neon/Supabase）国内访问延迟 150-300ms，不推荐生产使用（代码已兼容，连接串填 `postgresql://…` 并自行安装 psycopg2-binary 即可）。
+
+### 当前线上部署（微信云开发环境 · 已上线）
+
+| 项 | 值 |
+|---|---|
+| 访问网址 | https://ajmj-d2g1eishpbe7677fe-1301305388.ap-shanghai.app.tcloudbase.com/eldercare |
+| 形态 | 环境内事件云函数 `eldercare`（Python3.9，入口 index.main_handler）+ HTTP 访问路由 `/eldercare` |
+| 数据库 | 微信云托管 TDSQL-C MySQL（**外网地址**，账号 jsy96），首次访问自动建表 |
+| 更新代码 | `.venv/Scripts/python.exe deploy_scf.py`（自动打包→更新函数→路由已存在则跳过） |
+| 同环境邻居 | `/qm-admin` 路由（queue-miniapp 项目），互不影响，已验证共存 |
+
+注意事项：① 函数冷启动首次访问约 3~8 秒；② 微信云托管 MySQL 若重建，内网/外网地址会变——改 `secrets.json` 的 `database_url` 后重跑 deploy_scf.py；③ 公网地址走 TDSQL-C 自带鉴权，务必保持密码强度。
 
 ### 云开发环境「云托管」部署（MySQL 在云开发环境内时用这个）
 

@@ -21,6 +21,9 @@ from urllib.parse import urlparse, unquote
 from flask import g
 from werkzeug.security import generate_password_hash
 
+# 统一 pbkdf2：云函数运行时 OpenSSL 过老，无 hashlib.scrypt（werkzeug 新版默认 scrypt 会崩）
+HASH_METHOD = 'pbkdf2:sha256'
+
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 SCHEMA = """
@@ -111,7 +114,11 @@ SCHEMA_MYSQL = (SCHEMA.replace('__ID__', 'INT PRIMARY KEY AUTO_INCREMENT')
                       .replace('phone TEXT UNIQUE NOT NULL', 'phone VARCHAR(20) UNIQUE NOT NULL')
                       .replace('address TEXT NOT NULL DEFAULT \'\'',
                                'address VARCHAR(255) NOT NULL DEFAULT \'\'')
-                      .replace('token TEXT PRIMARY KEY', 'token VARCHAR(64) PRIMARY KEY'))
+                      .replace('token TEXT PRIMARY KEY', 'token VARCHAR(64) PRIMARY KEY')
+                      # MySQL 的 TEXT 列不能建索引，时间列统一 VARCHAR
+                      .replace('sched_start TEXT NOT NULL', 'sched_start VARCHAR(32) NOT NULL')
+                      .replace('sched_end TEXT NOT NULL', 'sched_end VARCHAR(32) NOT NULL')
+                      .replace('created_at TEXT NOT NULL', 'created_at VARCHAR(32) NOT NULL'))
 
 
 def _secrets():
@@ -242,13 +249,27 @@ def close_db(e=None):
 
 
 def _run_script(db, sql):
-    """执行多语句 DDL。"""
+    """执行多语句 DDL。MySQL 不支持 CREATE INDEX IF NOT EXISTS，先查元数据再建。"""
     if db.kind == 'sqlite':
         db.conn.executescript(sql)
         return
+    import re
     for stmt in sql.split(';'):
-        if stmt.strip():
-            db.execute(stmt)
+        s = stmt.strip()
+        if not s:
+            continue
+        m = re.match(r'CREATE INDEX IF NOT EXISTS (\w+) ON (\w+)', s)
+        if m:
+            idx, tbl = m.groups()
+            if db.kind == 'mysql':
+                exists = db.execute(
+                    'SELECT COUNT(*) AS c FROM information_schema.statistics '
+                    'WHERE table_schema=DATABASE() AND table_name=? AND index_name=?',
+                    (tbl, idx)).fetchone()['c']
+                if exists:
+                    continue
+                s = 'CREATE INDEX ' + s[len('CREATE INDEX IF NOT EXISTS '):]
+        db.execute(s)
 
 
 def init_db(app):
@@ -292,7 +313,7 @@ def seed(db):
         return insert_returning_id(
             db, 'INSERT INTO users(phone,password_hash,role,name,address,lat,lng,worker_id,created_at) '
                 'VALUES(?,?,?,?,?,?,?,?,?)',
-            (phone, generate_password_hash(pwd), role, name, address, la, ln, worker_id, now))
+            (phone, generate_password_hash(pwd, method=HASH_METHOD), role, name, address, la, ln, worker_id, now))
 
     admin = u('13900000001', 'admin123', 'admin', '管理员', '', None, None)  # noqa: F841
     w1 = u('13800001001', '123456', 'worker', '王秀英', '江汉区解放大道690号', lat0 + 0.012, lng0 - 0.008)

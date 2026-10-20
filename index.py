@@ -1,10 +1,10 @@
 """腾讯云开发 TCB 云函数入口：把「HTTP 访问/云接入」事件转成 WSGI 交给 Flask。
 
 部署（函数入口配置）：index.main_handler
-若云接入路径不是根路径（如 /eldercare），在函数环境变量加 STRIP_PREFIX=/eldercace。
 """
 import base64
 import io
+import json
 import os
 import sys
 from urllib.parse import urlencode
@@ -51,7 +51,10 @@ def main_handler(event, context):
             body = base64.b64decode(body)
         except Exception:
             body = b''
-    if isinstance(body, str):
+    if isinstance(body, dict):
+        # 部分网关会把 JSON 请求体解析成对象传入
+        body = json.dumps(body, ensure_ascii=False).encode('utf-8')
+    elif isinstance(body, str):
         body = body.encode('utf-8', 'replace')
 
     environ = {

@@ -7,13 +7,15 @@ from .db import BASE, close_db, init_db, load_config
 
 WEB_DIR = os.path.join(BASE, 'web')
 
-APP_VERSION = 'v1.0.261020-4'
+APP_VERSION = 'v1.0.261020-5'
 
 
 def create_app():
     app = Flask(__name__, static_folder=None)
     app.config['APP_CONF'] = load_config()
     app.json.ensure_ascii = False
+    if os.environ.get('CARE_DEBUG'):
+        app.config['PROPAGATE_EXCEPTIONS'] = True  # 云上排障：异常堆栈随响应抛出
 
     # 云上部署：数据库暂时连不上也先监听端口（否则 HTTP 云函数健康检查失败），
     # 后台每 20 秒重试，错误堆栈进平台日志便于定位
@@ -52,6 +54,16 @@ def create_app():
         conf = app.config['APP_CONF']
         return jsonify(version=APP_VERSION, app_name=conf['app_name'], app_sub=conf['app_sub'],
                        map=conf['map'], lunch=conf['lunch'], work_hours=conf['work_hours'])
+
+    @app.get('/api/health')
+    def health():
+        """数据库连通性诊断：ok=true 表示建表与登录均可用。"""
+        try:
+            from .db import get_db
+            n = get_db().execute('SELECT COUNT(*) AS c FROM users').fetchone()['c']
+            return jsonify(ok=True, users=n)
+        except Exception as e:
+            return jsonify(ok=False, error=f'{type(e).__name__}: {e}'[:400]), 500
 
     @app.get('/')
     def index():
