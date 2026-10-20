@@ -275,15 +275,24 @@ c2 = call('post', '/api/a/users', admin2,
           data={'role': 'customer', 'phone': '13700000002', 'name': '管理员2的顾客',
                 'password': '123456', 'address': '测试路4号', 'lat': 31.26, 'lng': 121.51,
                 'worker_id': w2['id']})
-assert all(u['id'] != w2['id'] for u in call('get', '/api/a/users?role=worker', admin)['users'])
-assert all(u['id'] != c2['id'] for u in call('get', '/api/a/users?role=customer', admin)['users'])
-call('post', '/api/a/users', admin,
-     data={'role': 'customer', 'phone': '13700000003', 'name': '越权顾客',
-           'password': '123456', 'worker_id': w2['id']}, expect=400)
-call('post', '/api/a/orders', admin,
-     data={'customer_id': c2['id'], 'item_id': item['id'],
+# 超级管理员可见全部；普通管理员只见自己名下
+assert any(u['id'] == w2['id'] for u in call('get', '/api/a/users?role=worker', admin)['users'])
+assert any(u['id'] == c2['id'] for u in call('get', '/api/a/users?role=customer', admin)['users'])
+assert len(call('get', '/api/a/users?role=worker', admin2)['users']) == 1
+# 超级管理员可指定员工归属哪个管理员
+w3 = call('post', '/api/a/users', admin,
+          data={'role': 'worker', 'phone': '13700000003', 'name': '超管分配的员工',
+                'password': '123456', 'address': '测试路5号', 'lat': 31.27, 'lng': 121.52,
+                'owner_admin_id': new_admin['id']})
+assert any(u['id'] == w3['id'] for u in call('get', '/api/a/users?role=worker', admin2)['users'])
+# 普通管理员不能使用别人的员工/顾客
+call('post', '/api/a/users', admin2,
+     data={'role': 'customer', 'phone': '13700000004', 'name': '越权顾客',
+           'password': '123456', 'worker_id': workers[0]['id']}, expect=400)
+call('post', '/api/a/orders', admin2,
+     data={'customer_id': customers[0]['id'], 'item_id': item['id'],
            'date': d_after, 'time': '11:00'}, expect=400)
-t('多管理员数据隔离（员工/顾客/订单）')
+t('多管理员数据隔离（超级管理员全局可见）')
 
 # ---------- 短信验证码重置密码 / 修改密码 ----------
 import os as _os

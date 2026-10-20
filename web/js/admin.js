@@ -3,12 +3,15 @@ const Admin = {
   cache: { workers: [], customers: [], items: [] },
 
   async loadRefs() {
-    const [w, c, i] = await Promise.all([
+    const calls = [
       API.call('/api/a/users?role=worker'),
       API.call('/api/a/users?role=customer'),
       API.call('/api/a/items'),
-    ]);
-    this.cache = { workers: w.users, customers: c.users, items: i.items };
+    ];
+    if (ME.is_super) calls.push(API.call('/api/a/users?role=admin'));
+    const [w, c, i, a] = await Promise.all(calls);
+    this.cache = { workers: w.users, customers: c.users, items: i.items,
+                   admins: a ? a.users : [] };
   },
 
   /* ============ 数据统计 ============ */
@@ -358,6 +361,8 @@ const Admin = {
       <div class="order-card card ${u.active ? 'confirmed' : 'cancelled'}" style="margin-bottom:8px">
         <div class="head"><span class="who">${esc(u.name)} ${u.active ? '' : '<span class="chip gray">已停用</span>'}</span></div>
         <div class="meta">📱 ${esc(u.phone)}</div>
+        ${ME.is_super && role !== 'admin'
+          ? `<div class="meta">所属管理员：${esc(u.admin_name || '未分配')}</div>` : ''}
         ${role === 'admin'
           ? `<div class="meta">${u.is_super ? '<span class="chip blue">超级管理员</span>' : '<span class="chip gray">普通管理员</span>'}
                · 创建于 ${esc(u.created_at || '')}</div>`
@@ -397,6 +402,8 @@ const Admin = {
     const isNew = !u;
     const isAdminRole = role === 'admin';
     const roleName = role === 'worker' ? '服务员' : role === 'customer' ? '顾客' : '管理员';
+    const owners = (this.cache.admins || []).filter(a => a.active);
+    const curOwner = (u && u.admin_id) || (ME.is_super && owners.length ? owners[0].id : null);
     let marker = null, pos = u && u.lat != null ? [u.lat, u.lng] : null;
     openModal(isNew ? `新增${roleName}` : `编辑：${u.name}`, `
       <div class="frow">
@@ -405,14 +412,19 @@ const Admin = {
       </div>
       <label class="fl">${isNew ? '初始密码' : '重置密码（留空不改）'}</label>
       <input type="text" id="uf-pwd" placeholder="至少 6 位" ${u ? 'value=""' : ''}>
-      ${isAdminRole ? '<div class="muted small" style="margin-top:8px">管理员账号可管理自己名下的服务員与顾客，数据互相隔离。</div>' : `
+      ${isAdminRole ? '<div class="muted small" style="margin-top:8px">管理员账号可管理自己名下的服务员与顾客，数据互相隔离。</div>' : `
+      ${ME.is_super ? `
+      <label class="fl">归属管理员</label>
+      <select id="uf-owner">${(this.cache.admins || []).filter(a => a.active)
+        .map(a => `<option value="${a.id}" ${u && u.admin_id === a.id ? 'selected' : ''}>${esc(a.name)}（${esc(a.phone)}）</option>`).join('')}</select>` : ''}
       <label class="fl">居住地址</label>
       <input type="text" id="uf-addr" value="${u ? esc(u.address) : ''}" placeholder="例：江汉区解放大道690号">
       <button type="button" class="btn btn-ghost btn-small" id="uf-geo" style="margin-top:6px">📍 根据地址自动定位</button>
       <span class="muted small" style="margin-left:8px">或直接点击下方地图选点</span>
       ${role === 'customer' ? `
       <label class="fl">指派服务员</label>
-      <select id="uf-worker">${this.cache.workers.filter(w => w.active)
+      <select id="uf-worker">${this.cache.workers.filter(w => w.active &&
+          (!ME.is_super || !curOwner || w.admin_id === curOwner))
         .map(w => `<option value="${w.id}" ${u && u.worker_id === w.id ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select>` : ''}
       <label class="fl">位置（点击地图打点，用于路线规划）</label>
       <div id="uf-map" class="map" style="height:240px"></div>
@@ -429,6 +441,8 @@ const Admin = {
             lng: isAdminRole ? null : (pos ? pos[1] : null),
           };
           if (role === 'customer') body.worker_id = +document.getElementById('uf-worker').value;
+          const ownerSel = document.getElementById('uf-owner');
+          if (ownerSel) body.owner_admin_id = +ownerSel.value;
           if (isNew) await API.call('/api/a/users', { method: 'POST', body });
           else await API.call(`/api/a/users/${u.id}`, { method: 'PUT', body });
           toast('已保存', true);
@@ -438,6 +452,14 @@ const Admin = {
         return false;
       },
       onMount(box) {
+        const ownerSel = box.querySelector('#uf-owner');
+        if (ownerSel) ownerSel.onchange = () => {
+          const ws = box.querySelector('#uf-worker');
+          if (!ws) return;
+          const oid = +ownerSel.value;
+          ws.innerHTML = Admin.cache.workers.filter(w => w.active && w.admin_id === oid)
+            .map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('');
+        };
         if (isAdminRole) return;  // 管理员无需地图选点
         setTimeout(() => {
           const map = Maps.create('uf-map');
