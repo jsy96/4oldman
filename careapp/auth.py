@@ -4,9 +4,9 @@ import secrets
 from datetime import datetime
 
 from flask import Blueprint, g, jsonify, request
-from werkzeug.security import check_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 
-from .db import get_db
+from .db import HASH_METHOD, get_db
 
 bp = Blueprint('auth', __name__)
 
@@ -24,6 +24,10 @@ def login():
         return jsonify(error='账号或密码错误'), 401
     if not row['active']:
         return jsonify(error='账号已停用，请联系管理员'), 403
+    # 旧版 100 万次迭代哈希自动升级为 15 万次（首次登录慢一次，之后每次登录更快）
+    if not row['password_hash'].startswith(HASH_METHOD + '$'):
+        db.execute('UPDATE users SET password_hash=? WHERE id=?',
+                   (generate_password_hash(password, method=HASH_METHOD), row['id']))
     token = secrets.token_hex(32)
     db.execute('INSERT INTO sessions(token,user_id,created_at) VALUES(?,?,?)',
                (token, row['id'], datetime.now().strftime('%Y-%m-%d %H:%M')))

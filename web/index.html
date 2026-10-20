@@ -7,12 +7,15 @@
 /* 挂在路由前缀下时（如 /eldercare），补尾斜杠使相对路径的 JS/CSS/API 正确解析 */
 if (location.pathname !== '/' && !location.pathname.endsWith('/'))
   location.replace(location.pathname + '/' + location.search + location.hash);
+/* 注册 Service Worker：版本化静态资源本地缓存，二次打开秒开 */
+if ('serviceWorker' in navigator)
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 </script>
 <meta name="theme-color" content="#2563eb">
 <link rel="icon" href="data:,">
 <title>颐养通 · 居家养老服务</title>
-<link rel="stylesheet" href="vendor/leaflet.css?v=18">
-<link rel="stylesheet" href="css/style.css?v=18">
+<link rel="stylesheet" href="vendor/leaflet.css?v=20">
+<link rel="stylesheet" href="css/style.css?v=20">
 </head>
 <body>
 
@@ -66,12 +69,12 @@ if (location.pathname !== '/' && !location.pathname.endsWith('/'))
 <div id="modal-root"></div>
 <div id="toast" class="toast" hidden></div>
 
-<script src="vendor/leaflet.min.js?v=18"></script>
-<script src="js/api.js?v=18"></script>
-<script src="js/map.js?v=18"></script>
-<script src="js/customer.js?v=18"></script>
-<script src="js/worker.js?v=18"></script>
-<script src="js/admin.js?v=18"></script>
-<script src="js/app.js?v=18"></script>
+<script src="vendor/leaflet.min.js?v=20"></script>
+<script src="js/api.js?v=20"></script>
+<script src="js/map.js?v=20"></script>
+<script src="js/customer.js?v=20"></script>
+<script src="js/worker.js?v=20"></script>
+<script src="js/admin.js?v=20"></script>
+<script src="js/app.js?v=20"></script>
 </body>
 </html>

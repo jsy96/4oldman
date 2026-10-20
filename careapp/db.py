@@ -22,7 +22,8 @@ from flask import g
 from werkzeug.security import generate_password_hash
 
 # 统一 pbkdf2：云函数运行时 OpenSSL 过老，无 hashlib.scrypt（werkzeug 新版默认 scrypt 会崩）
-HASH_METHOD = 'pbkdf2:sha256'
+# 迭代次数显式指定：默认 100 万次在云函数上要 ~0.6-1.5 秒/次，150000 次约 0.1 秒且仍安全
+HASH_METHOD = 'pbkdf2:sha256:150000'
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -216,6 +217,58 @@ def _mysql_connect(url):
                            autocommit=False, connect_timeout=6)
 
 
+class _MySQLPool:
+    """轻量连接池：复用 MySQL 连接，省掉每请求 200ms+ 的建连握手。"""
+
+    def __init__(self, factory, maxsize=6):
+        import queue
+        import threading
+        self.factory = factory
+        self.maxsize = maxsize
+        self.lock = threading.Lock()
+        self.idle = queue.LifoQueue(maxsize)
+        self.created = 0
+
+    def acquire(self):
+        try:
+            conn = self.idle.get_nowait()
+            try:
+                conn.ping(reconnect=True)
+                return conn
+            except Exception:
+                self._discard()
+        except Exception:
+            pass
+        with self.lock:
+            if self.created < self.maxsize:
+                self.created += 1
+                try:
+                    return self.factory()
+                except Exception:
+                    self.created -= 1
+                    raise
+        conn = self.idle.get(timeout=5)
+        conn.ping(reconnect=True)
+        return conn
+
+    def release(self, conn):
+        try:
+            self.idle.put_nowait(conn)
+        except Exception:
+            self._discard()
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def _discard(self):
+        with self.lock:
+            self.created = max(0, self.created - 1)
+
+
+_mysql_pool = None
+
+
 def get_db():
     if 'db' not in g:
         url = database_url()
@@ -227,7 +280,10 @@ def get_db():
                 _pg_pool = ThreadedConnectionPool(1, 8, dsn=url)
             g.db = DB(_pg_pool.getconn(), 'pg')
         elif kind == 'mysql':
-            g.db = DB(_mysql_connect(url), 'mysql')  # 内网直连，低流量下每请求一连接即可
+            global _mysql_pool
+            if _mysql_pool is None:
+                _mysql_pool = _MySQLPool(lambda: _mysql_connect(url))
+            g.db = DB(_mysql_pool.acquire(), 'mysql')
         else:
             conn = sqlite3.connect(db_path())
             conn.row_factory = sqlite3.Row
@@ -246,6 +302,8 @@ def close_db(e=None):
     finally:
         if db.kind == 'pg':
             _pg_pool.putconn(db.conn)
+        elif db.kind == 'mysql':
+            _mysql_pool.release(db.conn)  # 放回连接池复用
         else:
             db.conn.close()
 

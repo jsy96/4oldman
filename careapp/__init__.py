@@ -7,7 +7,7 @@ from .db import BASE, close_db, init_db, load_config
 
 WEB_DIR = os.path.join(BASE, 'web')
 
-APP_VERSION = 'v1.0.261020-18'
+APP_VERSION = 'v1.0.261020-20'
 
 
 def create_app():
@@ -80,7 +80,11 @@ def create_app():
     @app.get('/<path:p>')
     def assets(p):
         resp = send_from_directory(WEB_DIR, p)
-        resp.headers['Cache-Control'] = 'no-cache'  # CDN 每次回源校验，发版即生效
+        if request.args.get('v'):
+            # 带版本号的资源：浏览器/CDN 长期缓存，发版换版本号即自动失效
+            resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+        else:
+            resp.headers['Cache-Control'] = 'no-cache'
         return resp
 
     return app

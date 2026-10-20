@@ -96,7 +96,7 @@ function showLogin() {
       const r = await API.call('/api/login', { method: 'POST', body: {
         phone: $('#login-phone').value.trim(), password: $('#login-pwd').value } });
       API.setToken(r.token);
-      ME = await API.call('/api/me');
+      ME = { id: r.id, role: r.role, name: r.name };  // 登录响应已含用户信息，省一次往返
       showApp();
     } catch (ex) {
       err.textContent = ex.message;
@@ -136,16 +136,30 @@ function switchTab(key) {
 
 /* ---------- 启动 ---------- */
 async function boot() {
-  try {
-    CONF = await API.call('/api/meta');
-  } catch (e) {
-    document.body.innerHTML = `<div class="login-wrap"><div class="login-card">
-      <h1>服务暂不可用</h1><p class="login-sub">${esc(e.message)}</p></div></div>`;
-    return;
-  }
-  Maps.init(CONF.map);
+  // 先用本地缓存的配置立即初始化（第二次打开秒开），同时后台刷新最新配置
+  let cached = null;
+  try { cached = JSON.parse(localStorage.getItem('care_meta') || 'null'); } catch (e) { cached = null; }
+  if (cached && cached.map) { CONF = cached; Maps.init(CONF.map); }
+  const metaP = API.call('/api/meta').then(m => {
+    CONF = m;
+    try { localStorage.setItem('care_meta', JSON.stringify(m)); } catch (e) { /* 忽略 */ }
+    Maps.init(m.map);
+    return m;
+  }).catch(() => null);
+
   if (API.token) {
-    try { ME = await API.call('/api/me'); showApp(); return; } catch (e) { API.setToken(''); }
+    try {
+      const [me] = await Promise.all([API.call('/api/me'), metaP]);  // 并行，省一个往返
+      ME = me;
+      showApp();
+      return;
+    } catch (e) { API.setToken(''); }
+  }
+  await metaP;
+  if (!CONF) {
+    document.body.innerHTML = `<div class="login-wrap"><div class="login-card">
+      <h1>服务暂不可用</h1><p class="login-sub">网络连接失败，请稍后刷新重试</p></div></div>`;
+    return;
   }
   showLogin();
 }
