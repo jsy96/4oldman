@@ -30,6 +30,9 @@ const Worker = {
               <a class="btn btn-green btn-small" href="tel:${esc(o.customer_phone)}">📞 打电话</a>
               <a class="btn btn-ghost btn-small" href="sms:${esc(o.customer_phone)}">💬 短信</a>
               <button class="btn btn-small" data-confirm="${o.id}">确认上门</button>
+              <button class="btn btn-plain btn-small" data-reschedule="${o.id}"
+                data-cur="${esc(o.sched_start)}" data-name="${esc(o.customer_name)}"
+                data-item="${esc(o.item_name)}" data-min="${o.minutes}">改期</button>
             </div>
           </div>`).join('') : '<div class="empty">明天没有待确认的订单</div>'}
       </div>
@@ -63,6 +66,11 @@ const Worker = {
       actions.push(`<button class="btn btn-green btn-small" data-complete="${o.id}">完成服务</button>`);
       actions.push(`<button class="btn btn-danger btn-small" data-exc="${o.id}">上报异常</button>`);
     }
+    if (['pending', 'confirmed', 'exception'].includes(o.status)) {
+      actions.push(`<button class="btn btn-plain btn-small" data-reschedule="${o.id}"
+        data-cur="${esc(o.sched_start)}" data-name="${esc(o.customer_name)}"
+        data-item="${esc(o.item_name)}" data-min="${o.minutes}">改期</button>`);
+    }
     return `
       <div class="order-card card ${o.status}${alt ? ' date-alt' : ''}" style="margin-bottom:8px">
         <div class="head"><span class="time">${esc(o.sched_start.slice(11))} ~ ${esc(o.sched_end.slice(11))}</span>${chip(o.status)}</div>
@@ -77,7 +85,49 @@ const Worker = {
       </div>`;
   },
 
+  openRescheduleModal(o, rerender) {
+    openModal('修改服务时间', `
+      <p>顾客：<b>${esc(o.customer_name)}</b> · ${esc(o.item_name)}（${o.minutes}分钟）</p>
+      <label class="fl">新的预约时间</label>
+      <input type="datetime-local" id="wr-time" value="${esc(o.sched_start.replace(' ', 'T'))}">
+      <div id="wr-err" style="margin-top:8px"></div>`, {
+      okText: '保存',
+      onOk: async () => {
+        const v = document.getElementById('wr-time').value.replace('T', ' ');
+        const err = document.getElementById('wr-err');
+        if (!v) { toast('请选择时间'); return false; }
+        try {
+          await API.call(`/api/w/orders/${o.id}/reschedule`, { method: 'POST', body: { start: v } });
+          toast('已改期，订单恢复为已确认', true);
+          closeModal();
+          rerender();
+        } catch (e) {
+          const d = e.data || {};
+          if (d.conflicts) {
+            err.innerHTML = `<div class="warn-box">新时间与其它订单冲突（需间隔30分钟以上）</div>`
+              + (d.suggestions && d.suggestions.length
+                ? `<div class="info-box">可用时段：${d.suggestions.map(s =>
+                    `<button type="button" class="btn btn-ghost btn-small" data-wslot="${s}">${s}</button>`).join(' ')}</div>`
+                : '');
+            err.querySelectorAll('[data-wslot]').forEach(b => b.onclick = () => {
+              const day = document.getElementById('wr-time').value.slice(0, 10);
+              document.getElementById('wr-time').value = `${day}T${b.dataset.wslot}`;
+            });
+          } else {
+            err.innerHTML = `<div class="warn-box">${esc(e.message)}</div>`;
+          }
+        }
+        return false;
+      },
+    });
+  },
+
   wireOrderButtons(el, rerender) {
+    el.querySelectorAll('[data-reschedule]').forEach(b => b.onclick = () => Worker.openRescheduleModal({
+      id: b.dataset.reschedule, sched_start: b.dataset.cur,
+      customer_name: b.dataset.name, item_name: b.dataset.item,
+      minutes: b.dataset.min,
+    }, rerender));
     el.querySelectorAll('[data-confirm]').forEach(b => b.onclick = async () => {
       try {
         await API.call(`/api/w/orders/${b.dataset.confirm}/confirm`, { method: 'POST' });

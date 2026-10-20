@@ -126,6 +126,40 @@ def complete(oid):
     return jsonify(ok=True)
 
 
+@bp.post('/orders/<int:oid>/reschedule')
+@auth_required('worker')
+def reschedule(oid):
+    """服务员修改服务时间：重算结束时间、校验冲突、恢复为已确认并留日志。"""
+    db = get_db()
+    o = db.execute('SELECT * FROM orders WHERE id=? AND worker_id=?', (oid, g.user['id'])).fetchone()
+    if o is None:
+        return jsonify(error='订单不存在'), 404
+    if o['status'] in ('completed', 'cancelled'):
+        return jsonify(error='已完成/已取消订单不能改期'), 400
+    d = request.get_json(force=True, silent=True) or {}
+    try:
+        start_dt = datetime.strptime(d.get('start'), '%Y-%m-%d %H:%M')
+    except (TypeError, ValueError):
+        return jsonify(error='时间格式不正确'), 400
+    if start_dt < datetime.now():
+        return jsonify(error='不能改到过去的时间'), 400
+    duration = o['duration_minutes'] or db.execute(
+        'SELECT minutes FROM service_items WHERE id=?', (o['item_id'],)).fetchone()['minutes']
+    end_dt = start_dt + timedelta(minutes=duration)
+    conflicts = services.get_conflicts(o['worker_id'], start_dt, end_dt, exclude_order_id=oid)
+    if conflicts:
+        return jsonify(error='新时间与其它订单冲突（需间隔30分钟以上）', conflicts=conflicts,
+                       suggestions=services.suggest_slots(o['worker_id'], start_dt, duration)), 409
+    db.execute("UPDATE orders SET sched_start=?, sched_end=?, status='confirmed', "
+               "exception_type=NULL, exception_note=NULL, updated_at=? WHERE id=?",
+               (start_dt.strftime('%Y-%m-%d %H:%M'), end_dt.strftime('%Y-%m-%d %H:%M'),
+                services.now_str(), oid))
+    services.log_order(oid, g.user['name'], '服务员改期',
+                       f'{o["sched_start"]} → {start_dt.strftime("%Y-%m-%d %H:%M")}')
+    db.commit()
+    return jsonify(ok=True, order=services.get_order_or_404(oid))
+
+
 @bp.post('/orders/<int:oid>/exception')
 @auth_required('worker')
 def exception(oid):

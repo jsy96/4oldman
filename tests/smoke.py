@@ -109,6 +109,17 @@ assert all(o['status'] != 'pending'
            for o in call('get', f'/api/w/orders?scope=tomorrow', w1)['orders'])
 t('一键确认明日订单')
 
+# 服务员修改服务时间：改到空闲时段成功；改成与他单重叠 → 409
+tom_orders = call('get', f'/api/w/orders?scope=tomorrow', w1)['orders']
+target0 = tom_orders[0]
+rs = call('post', f'/api/w/orders/{target0["id"]}/reschedule', w1,
+          data={'start': f'{tomorrow} 16:30'})
+assert rs['order']['sched_start'] == f'{tomorrow} 16:30' and rs['order']['status'] == 'confirmed'
+other = next(o for o in tom_orders if o['id'] != target0['id'])
+call('post', f'/api/w/orders/{target0["id"]}/reschedule', w1,
+     data={'start': other['sched_start']}, expect=409)
+t('服务员修改服务时间（改期+冲突拦截）')
+
 today_orders = call('get', '/api/w/orders?scope=today', w1)['orders']
 target = next(o for o in today_orders if o['status'] == 'confirmed')
 tok = c1 if target['customer_phone'] == '13800002001' else c2
