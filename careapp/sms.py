@@ -82,11 +82,12 @@ def _tc3_post(action, payload, secret_id, secret_key, host='sms.tencentcloudapi.
 def send_verification_code(phone, code, minutes=5):
     """发送验证码。返回 'sent' 或 'debug'（本地调试模式）。"""
     cfg = _cfg()
+    # 调试开关优先：本地/测试环境绝不真发短信（生产环境不会设置该变量）
+    if os.environ.get('CARE_SMS_DEBUG') == '1':
+        print(f'[SMS-DEBUG] phone={phone} code={code} minutes={minutes}', flush=True)
+        return 'debug'
     if not (cfg['app_id'] and cfg['sign'] and cfg['template'] and
             cfg['secret_id'] and cfg['secret_key']):
-        if os.environ.get('CARE_SMS_DEBUG') == '1':
-            print(f'[SMS-DEBUG] phone={phone} code={code} minutes={minutes}', flush=True)
-            return 'debug'
         raise SmsNotConfigured('短信服务未配置：请在 secrets.json 填写 sms_sdk_app_id / '
                                'sms_sign_name / sms_template_id（并确保已创建审核通过的验证码模板）')
     phone = phone.strip()

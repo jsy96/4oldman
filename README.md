@@ -204,7 +204,7 @@ SCF 计费参考：免费额度（云函数每月 100 万次调用 + 40000 GBs �
 - `sms_sign_name` / `SMS_SIGN_NAME`
 - `sms_template_id` / `SMS_TEMPLATE_ID`（同时复用 `tencent_secret_id/key` 调用短信 API）
 
-未配置时接口返回「短信服务未配置」；本地联调可设 `CARE_SMS_DEBUG=1`，验证码会打印到日志并直接返回给前端。
+未配置时接口返回「短信服务未配置」；本地联调/测试可设 `CARE_SMS_DEBUG=1`：**只打印日志并返回调试码，绝不真实发送**。模板参数个数由 `sms_template_param_count` 控制（1=仅验证码；2=验证码+分钟）。
 
 ### 多管理员
 
