@@ -136,10 +136,15 @@ t('AI 行程路线（排序/耗时/电量/午餐）')
 
 # 时间安排合理性检查：每段带 可用间隔/所需时间/判定
 assert 'check' in route and route['check']['legs'], route.get('check')
-for leg in route['check']['legs']:
+chk = route['check']
+for leg in chk['legs']:
     assert leg['status'] in ('ok', 'tight', 'late')
     assert leg['available_min'] is not None and leg['required_min'] >= leg['minutes']
-t('服务员行程时间合理性检查（逐段间隔判定）')
+assert chk['orders'] and chk['orders'][0]['depart_advice'], chk['orders']
+assert chk['return_leg'] and chk['return_leg']['arrive_home'], chk['return_leg']
+assert chk['totals']['distance_km'] > 0 and chk['totals']['ride_minutes'] > 0
+assert chk['totals']['work_minutes'] > 0 and chk['totals']['income_cents'] > 0
+t('服务员行程时间合理性检查（逐单+返程+全天汇总）')
 
 # 管理端逐个检查所有服务员（同一算法）
 sc = call('get', f'/api/a/schedule-check?date={tomorrow}', admin)

@@ -4,6 +4,7 @@
 
 ## 更新记录
 
+- **2026-10-20　v1.0.261020-21**　① **清理项目**：删除已弃用的 Dockerfile、pack_run.py、pack_scf.py、scf_bootstrap、构建产物与临时文件；② 文案：「恢复确认」→「**确认**」、「取消退款」→「**取消**」；③ **行程检查改版**：逐单显示 开始-结束时间、距驻地/上一单距离与骑行时长、第一单建议出发时间、后续单预留时间是否足够；最后显示返程距离/骑行时长/到驻地时间；底部汇总全天骑行距离、骑行时长、工作时长、收入；④ 新增 `deploy.bat` 一键发布（打包→部署→刷新CDN→提交推送）。
 - **2026-10-20　v1.0.261020-20**　**性能优化**：① 密码哈希迭代由 100 万次降为 15 万次（登录 ~0.64s → ~0.1s，旧哈希在用户首次登录时自动升级）；② MySQL 改用**连接池**复用连接（省去每请求 ~240ms 建连）；③ 前端登录后不再多请求一次 `/api/me`，启动并行拉取配置并本地缓存；④ 云函数内存 256MB → **512MB**（CPU 同步提升）；⑤ 新增 **Service Worker** 缓存带版本号的静态资源，绕过网关强制 no-store，二次打开秒开。线上实测：接口 0.15~0.3 秒（优化前 1~3 秒）。
 - **2026-10-20　v1.0.261020-18**　服务员端新增**改期**：订单卡片（待确认/已确认/异常）可点「改期」修改服务时间——自动按原时长重算结束时间、校验 30 分钟冲突（冲突给出可用时段）、恢复为已确认并清除异常标记，操作写入订单日志。线上实测改期成功、冲突返回 409。
 - **2026-10-20　v1.0.261020-17**　服务员订单页体验调整：**默认显示「今天」**；顶部范围改为 **今天 / 明天 / 后天 / 未来 / 历史订单**（原「未来7天」拆分为后天与未来）；行程路线时间轴在相邻两单之间直接显示「**与上一单间隔 X 分钟**」，检查结果只保留骑行分钟/距离/间隔/所需分钟等数字，去掉建议性话术。
@@ -81,9 +82,14 @@
 ```
 4oldman/
 ├── server.py              # 入口：python server.py → http://127.0.0.1:8000
-├── start.bat              # 一键启动（自动用 uv 建 .venv）
+├── start.bat              # 本地一键启动（自动用 uv 建 .venv）
+├── deploy.bat             # 一键发布：打包→部署腾讯云→刷新CDN→git提交推送
+├── release.py             # deploy.bat 的实际执行脚本
+├── deploy_scf.py          # 腾讯云开发环境部署（原地更新函数/路由/CDN）
+├── pack_fn.py             # 打包云函数 zip（Linux x86_64 依赖）
+├── index.py               # 云函数入口（HTTP 事件 → Flask）
 ├── config.json            # 配置：地图中心/底图、工作时间、午餐、车速、电量模型等
-├── requirements.txt       # flask、requests
+├── requirements.txt       # flask、requests、urllib3、PyMySQL、cryptography
 ├── careapp/               # 后端包
 │   ├── __init__.py        # 应用工厂、静态资源、/api/meta
 │   ├── db.py              # SQLite 表结构 + 首次运行演示数据
@@ -97,6 +103,7 @@
 │   ├── index.html         # 单页应用外壳
 │   ├── css/style.css      # 手机底部导航+桌面横排；大字号适老化
 │   ├── js/                # api / map / customer / worker / admin / app
+│   ├── sw.js              # Service Worker（版本化静态资源缓存）
 │   └── vendor/            # Leaflet 本地副本
 ├── tests/smoke.py         # 后端冒烟测试（临时库，不污染真实数据）
 └── data/care.db           # SQLite 数据文件（首次运行自动生成，git 忽略）
@@ -159,47 +166,22 @@ uv pip install --python .venv/Scripts/python.exe -r requirements.txt
 | 形态 | 环境内事件云函数 `eldercare`（Python3.9，入口 index.main_handler）+ HTTP 访问路由（leige.online 的 `/` 与 `/eldercare`、默认域名 `/eldercare`） |
 | 域名链路 | Cloudflare CNAME（灰云）→ 腾讯 CDN（dnsv1）→ TCB HTTP 网关 → 云函数；所有权 TXT `_cloudbase-challenge`；首页悬挂备案号 |
 | 数据库 | 微信云托管 TDSQL-C MySQL（**外网地址**，账号 jsy96），首次访问自动建表 |
-| 更新代码 | `.venv/Scripts/python.exe deploy_scf.py`（自动打包→更新函数→路由已存在则跳过） |
+| 更新代码 | **双击 `deploy.bat`**（打包→原地更新函数→刷新CDN→git提交推送，一条龙） |
 | 同环境邻居 | `/qm-admin` 路由（queue-miniapp 项目），互不影响，已验证共存 |
 
 注意事项：① 函数冷启动首次访问约 3~8 秒；② 微信云托管 MySQL 若重建，内外网地址会变——改 `secrets.json` 的 `database_url` 后重跑 deploy_scf.py；③ 公网地址走 TDSQL-C 自带鉴权，务必保持密码强度；④ `www.leige.online` 未接（挂在 CF Worker 上），如需跳转主域可在该 Worker 配 301。
 
-### 云开发环境「云托管」部署（MySQL 在云开发环境内时用这个）
+### 一键发布（日常改完代码就做这一件事）
 
-连接串是内网 IP（如 `172.17.0.6`）说明 MySQL 在云开发环境内部，**只有同环境的服务能连**，独立云函数 SCF 连不上 → 用环境内「云托管」：
-
-1. `secrets.json` 填好 `database_url`（账号密码来自环境控制台的数据库页面，密码忘了可在该页重置）与 `amap_key`
-2. `.venv/Scripts/python.exe pack_run.py` → 生成 `cloudbase_run.zip`（含 Dockerfile，依赖云端构建；账号还是占位符会拒绝打包）
-3. 控制台 → 云开发 → 你的环境 → **云托管** → 新建服务（如 `eldercare`，0.25核/512MB 起步）→ 代码「本地上传」选 zip → **监听端口 8000**
-4. 部署完成后「访问地址」即默认 HTTPS 域名，手机直接用（首次冷启动稍慢，之后毫秒级）
-5. 若访问数据库超时：服务设置 → 网络开启内网访问/与环境同 VPC
-6. 首次访问自动建表+演示数据，登录后立即改密码
-
-后续改代码：重跑第 2 步 → 服务页面「重新部署」上传新 zip 即可。
-
-### 腾讯云函数 SCF 部署（MySQL 是独立云数据库 CDB 时用这个）
-
-**方式一：一键部署（推荐，2 条命令）**
-
-```bash
-# 1. 打包（生成 scf_bundle.zip）
-.venv/Scripts/python.exe pack_scf.py
-# 2. 部署（创建/更新函数+环境变量+VPC+触发器）
-.venv/Scripts/python.exe deploy_scf.py --region ap-guangzhou --vpc-id vpc-xxx --subnet-id subnet-xxx
+```bat
+deploy.bat "本次改动说明"
 ```
 
-前提：`secrets.json` 已填 `tencent_secret_id` / `tencent_secret_key`（控制台 → 右上角头像 → 访问管理 → API 密钥管理 → 新建密钥，只放本文件不入 git）、`database_url`、`amap_key`。函数已存在时自动改为更新模式；触发器自动创建失败时会提示控制台手动路径。
+自动完成：打包（Linux 依赖）→ 云函数**原地更新**（512MB/60s）→ 确保路由 → 刷新 CDN 首页缓存 → `git add/commit` → `git push`（网络失败自动重试 10 次）。
 
-**方式二：控制台手点（6 步）**
+前提：`secrets.json` 已填 `tencent_secret_id` / `tencent_secret_key`、`database_url`、`amap_key`（均不入 git）。
 
-1. **建库**：控制台 → 云数据库 MySQL（基础版即可，与函数同地域如广州/上海）→ 初始化账号和库（如 `oldcare`）。内网地址形如 `10.0.x.x:3306`
-2. **打包**：本机执行 `.venv\Scripts\python.exe pack_scf.py` → 生成 `scf_bundle.zip`（含 Linux x86_64 依赖，按 Python 3.9 打包，**函数运行时要选 Python 3.9**）
-3. **建函数**：控制台 → 云函数 SCF → 新建 → **Web 函数** → 代码本地上传 zip → 启动命令 `python server.py`
-4. **网络**：函数「高级配置 → 网络」勾选**与 MySQL 同一 VPC 和子网**（内网互通，无需公网）
-5. **环境变量**（函数配置 → 环境变量，优先级高于 secrets.json）：
-   - `DATABASE_URL` = `mysql://账号:密码@10.0.x.x:3306/oldcare`（密码含特殊字符需 URL 编码）
-   - `AMAP_KEY` = 高德 Key（可选）
-6. **访问**：函数「触发管理 → API 网关触发器」得到默认 URL（无需备案域名；自定义域名需备案）。首次冷启动约 2-5 秒，之后毫秒级
+> 手动打包上传（备用）：`.venv\Scripts\python.exe pack_fn.py` 生成 `cloudbase_fn.zip`，控制台 → 云函数 → 上传代码。
 
 > 说明：本应用是 SQL 数据库，**首次访问自动建表并写入演示数据，无需手动建表，也不使用云开发的文档「集合」**。MySQL 实例购买需在控制台完成（涉及付费，不建议脚本代建）。上线后登录改掉所有演示账号密码。
 

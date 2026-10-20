@@ -5,6 +5,42 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g,
   c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmtMoney = c => ((c || 0) / 100).toFixed(2);
+const fmtMinutes = m => (m >= 60 ? `${Math.floor(m / 60)} 小时 ${m % 60} 分` : `${m} 分钟`);
+
+/* 行程时间安排检查结果（服务员端与管理员端共用） */
+function scheduleCheckHtml(c) {
+  const badge = st => st === 'ok' ? '<span class="chip green">合理</span>'
+    : st === 'tight' ? '<span class="chip amber">偏紧</span>' : '<span class="chip red">会迟到</span>';
+  const color = st => st === 'ok' ? 'var(--green)' : st === 'tight' ? 'var(--amber)' : 'var(--red)';
+  const orders = (c.orders || []).map(o => `
+    <div class="stop">
+      <div class="seq" style="background:${color(o.status)}">${o.seq}</div>
+      <div class="body">
+        <div><b>第${o.seq}单 ${esc(o.customer)}</b> · ${esc(o.item)} ${badge(o.status)}</div>
+        <div class="tm">${o.start} - ${o.end}</div>
+        ${o.seq === 1
+          ? `<div class="muted small">距驻地 ${o.distance_km} km · 骑行约 ${o.travel_min} 分钟 · 建议 ${esc(o.depart_advice || '')} 之前出发</div>`
+          : `<div class="muted small">距上一单 ${o.distance_km} km · 骑行约 ${o.travel_min} 分钟 · 预留 ${o.gap_min} 分钟（需 ≥ ${o.required_min} 分钟）</div>`}
+      </div>
+    </div>`).join('');
+  const ret = c.return_leg ? `
+    <div class="stop">
+      <div class="seq" style="background:#64748b">⌂</div>
+      <div class="body">
+        <div><b>返程回驻地</b></div>
+        <div class="muted small">最后一单 ${esc((c.orders || []).length ? c.orders[c.orders.length - 1].end : '')} 结束
+          · 距驻地 ${c.return_leg.distance_km} km · 骑行约 ${c.return_leg.travel_min} 分钟
+          · 约 ${esc(c.return_leg.arrive_home)} 到达驻地</div>
+      </div>
+    </div>` : '';
+  const t = c.totals || {};
+  return orders + ret + `
+    <div class="info-box" style="margin-top:12px">
+      全天：骑行 <b>${t.distance_km} km</b> / <b>${fmtMinutes(t.ride_minutes || 0)}</b>
+      · 工作时长 <b>${fmtMinutes(t.work_minutes || 0)}</b>
+      · 收入 <b>¥${fmtMoney(t.income_cents || 0)}</b>
+    </div>`;
+}
 const pad = n => String(n).padStart(2, '0');
 const dstr = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const todayStr = () => dstr(new Date());

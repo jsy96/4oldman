@@ -392,7 +392,7 @@ def reassign(oid):
 @bp.post('/orders/<int:oid>/resolve')
 @auth_required('admin')
 def resolve(oid):
-    """异常订单处理入口：confirm 恢复确认 / complete 标记完成 / cancel_refund 取消退款。"""
+    """异常订单处理入口：confirm 确认 / complete 标记完成 / cancel_refund 取消（自动退款）。"""
     o, err = _load_order(oid)
     if err:
         return err
@@ -403,7 +403,7 @@ def resolve(oid):
             return jsonify(error='仅待确认/异常订单可恢复'), 400
         db.execute("UPDATE orders SET status='confirmed', exception_type=NULL, exception_note=NULL, "
                    'updated_at=? WHERE id=?', (services.now_str(), oid))
-        services.log_order(oid, g.user['name'], '恢复确认', '管理员处理异常后恢复为已确认')
+        services.log_order(oid, g.user['name'], '确认', '管理员处理异常后恢复为已确认')
     elif action == 'complete':
         if o['status'] in ('completed', 'cancelled'):
             return jsonify(error='订单已结束'), 400

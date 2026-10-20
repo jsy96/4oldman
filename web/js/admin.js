@@ -152,9 +152,9 @@ const Admin = {
           <td><div class="ops">
             ${['pending', 'confirmed', 'exception'].includes(o.status) ? `<button class="btn btn-ghost btn-small" data-reschedule="${o.id}" data-cur="${esc(o.sched_start)}">改期</button>` : ''}
             ${['pending', 'confirmed', 'exception'].includes(o.status) ? `<button class="btn btn-ghost btn-small" data-reassign="${o.id}" data-cur="${esc(o.worker_name)}">改派</button>` : ''}
-            ${['pending', 'exception'].includes(o.status) ? `<button class="btn btn-small" data-resolve="${o.id}" data-act="confirm">恢复确认</button>` : ''}
+            ${['pending', 'exception'].includes(o.status) ? `<button class="btn btn-small" data-resolve="${o.id}" data-act="confirm">确认</button>` : ''}
             ${['confirmed', 'exception'].includes(o.status) ? `<button class="btn btn-green btn-small" data-resolve="${o.id}" data-act="complete">标记完成</button>` : ''}
-            ${o.status !== 'cancelled' && o.status !== 'completed' ? `<button class="btn btn-danger btn-small" data-resolve="${o.id}" data-act="cancel_refund">取消退款</button>` : ''}
+            ${o.status !== 'cancelled' && o.status !== 'completed' ? `<button class="btn btn-danger btn-small" data-resolve="${o.id}" data-act="cancel_refund">取消</button>` : ''}
             <button class="btn btn-plain btn-small" data-logs="${o.id}">日志</button>
           </div></td>
         </tr>`; }).join('')})()}
@@ -202,7 +202,7 @@ const Admin = {
     });
     box.querySelectorAll('[data-resolve]').forEach(b => b.onclick = async () => {
       const act = b.dataset.act;
-      const txt = { confirm: '恢复为已确认？', complete: '标记为已完成（将扣款）？', cancel_refund: '取消该订单（已扣款将自动退款）？' }[act];
+      const txt = { confirm: '确认该订单？', complete: '标记为已完成（将扣款）？', cancel_refund: '取消该订单（已扣款将自动退款）？' }[act];
       if (!confirm(txt)) return;
       try {
         await API.call(`/api/a/orders/${b.dataset.resolve}/resolve`, { method: 'POST', body: { action: act } });
@@ -660,19 +660,8 @@ const Admin = {
         body.innerHTML = '<div class="empty">当天没有服务员行程</div>';
         return;
       }
-      const badge = st => st === 'ok' ? '<span class="chip green">合理</span>'
-        : st === 'tight' ? '<span class="chip amber">偏紧</span>' : '<span class="chip red">会迟到</span>';
       body.innerHTML = d.workers.map((w, idx) => {
         const c = w.check || {};
-        const legs = (c.legs || []).map(l => `
-          <div class="stop">
-            <div class="seq" style="background:${l.status === 'ok' ? 'var(--green)' : l.status === 'tight' ? 'var(--amber)' : 'var(--red)'}">${l.seq}</div>
-            <div class="body">
-              <div><b>${esc(l.from_label)} → ${esc(l.to_label)}</b> ${badge(l.status)}</div>
-              <div class="muted small">骑行 ${l.km} km · 预计 ${l.minutes} 分钟；两单间隔 ${l.available_min} 分钟
-                （建议 ≥ ${l.required_min} 分钟）</div>
-            </div>
-          </div>`).join('');
         return `
           <div class="card">
             <h3>${esc(w.worker_name)}
@@ -680,8 +669,8 @@ const Admin = {
                 : `<span class="chip red">迟到 ${c.late}</span> <span class="chip amber">偏紧 ${c.tight}</span>`}
               <button class="btn btn-ghost btn-small" data-map="${idx}">🗺️ 查看地图</button>
             </h3>
-            <div class="muted small" style="margin-bottom:6px">${w.stops.length} 单 · 总里程 ${w.total_km} km · ${esc(w.distance_source || '')}</div>
-            ${legs || '<div class="empty">当天只有一单，无分段检查</div>'}
+            <div class="muted small" style="margin-bottom:8px">${w.stops.length} 单 · ${esc(w.distance_source || '')}</div>
+            ${(c.orders || []).length ? scheduleCheckHtml(c) : '<div class="empty">当天没有可检查的订单</div>'}
           </div>`;
       }).join('');
       body.querySelectorAll('[data-map]').forEach(b =>
@@ -720,6 +709,15 @@ const Admin = {
               interactive: false,
             }).addTo(map);
           });
+          if (w.check && w.check.return_leg) {
+            const rl = w.check.return_leg;
+            L.polyline([[rl.from_lat, rl.from_lng], [rl.to_lat, rl.to_lng]],
+                       { color: '#94a3b8', weight: 3, dashArray: '4 6' }).addTo(map);
+            L.marker([(rl.from_lat + rl.to_lat) / 2, (rl.from_lng + rl.to_lng) / 2], {
+              icon: L.divIcon({ className: '', html: `<div class="leg-label">≈${rl.travel_min}分 · 返程</div>`, iconSize: [0, 0] }),
+              interactive: false,
+            }).addTo(map);
+          }
           if (pts.length) map.fitBounds(pts, { padding: [30, 30] });
           Maps.refresh();
         }, 80);

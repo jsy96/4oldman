@@ -132,6 +132,10 @@ def plan_route(worker, orders, conf, date_str):
     prev, lunch_used = start, False
     amap_legs = 0
     prev_label = start_name
+    day_start_dt = clock
+    prev_sched_end = None
+    first_depart_dt = None
+    schedule_orders = []
     markers = [dict(lat=start[0], lng=start[1], seq='🏠', home=True, customer=start_name)]
     for k, o in enumerate(ordered):
         pt = (o['lat'], o['lng'])
@@ -144,8 +148,10 @@ def plan_route(worker, orders, conf, date_str):
             amap_legs += 1
         total_km += km
         sched = datetime.strptime(o['sched_start'], '%Y-%m-%d %H:%M')
-        # 时间安排合理性：从上一站出发到本单预约开始，实际可用间隔 vs 所需（骑行+准备）
-        available_min = int((sched - clock).total_seconds() // 60)
+        sched_end = sched + timedelta(minutes=o['minutes'])
+        # 时间安排合理性：上一单预约结束 → 本单预约开始 的预留间隔 vs 所需（骑行+准备）
+        gap_base = prev_sched_end if prev_sched_end else day_start_dt
+        available_min = int((sched - gap_base).total_seconds() // 60)
         required_min = leg_min + buffer_min
         if available_min < leg_min:
             check_status = 'late'
@@ -170,6 +176,17 @@ def plan_route(worker, orders, conf, date_str):
                          from_label=prev_label, to_label=o['customer_name'],
                          available_min=available_min, required_min=required_min,
                          status=check_status))
+        depart_advice = None
+        if k == 0:
+            first_depart_dt = max(day_start_dt, sched - timedelta(minutes=required_min))
+            depart_advice = first_depart_dt.strftime('%H:%M')
+        schedule_orders.append(dict(
+            seq=k + 1, order_id=o['id'], customer=o['customer_name'], item=o['item_name'],
+            start=sched.strftime('%H:%M'), end=sched_end.strftime('%H:%M'),
+            from_label=prev_label, distance_km=round(km, 2), travel_min=leg_min,
+            gap_min=available_min, required_min=required_min,
+            depart_advice=depart_advice, status=check_status))
+        prev_sched_end = sched_end
         prev_label = o['customer_name']
         markers.append(dict(lat=pt[0], lng=pt[1], seq=k + 1,
                             customer=o['customer_name'], item=o['item_name'],
@@ -185,6 +202,28 @@ def plan_route(worker, orders, conf, date_str):
 
     work_minutes = int((clock - datetime.strptime(conf['day_start'], '%H:%M').replace(
         year=d.year, month=d.month, day=d.day)).total_seconds() // 60) if stops_out else 0
+
+    # 返程：最后一单结束 → 驻地
+    return_leg = None
+    total_ride_km, total_ride_min, day_work_min, income_cents = 0.0, 0, 0, 0
+    if ordered:
+        ride_back = amap.bicycling(prev, start)
+        if ride_back:
+            ret_km = ride_back[0] / 1000
+            ret_min = max(3, round(ride_back[1] / 60 * weather_factor))
+        else:
+            ret_km = haversine_km(prev, start) * factor
+            ret_min = max(5, math.ceil(ret_km / speed * 60))
+        arrive_home = prev_sched_end + timedelta(minutes=ret_min)
+        return_leg = dict(distance_km=round(ret_km, 2), travel_min=ret_min,
+                          from_lat=prev[0], from_lng=prev[1],
+                          to_lat=start[0], to_lng=start[1],
+                          from_label=prev_label, arrive_home=arrive_home.strftime('%H:%M'))
+        total_ride_km = total_km + ret_km
+        total_ride_min = sum(l['minutes'] for l in legs) + ret_min
+        if first_depart_dt:
+            day_work_min = int((arrive_home - first_depart_dt).total_seconds() // 60)
+        income_cents = sum(int(o.get('worker_pay_cents') or 0) for o in ordered)
 
     bat_conf = conf['battery']
     tavg = (weather['tmax'] + weather['tmin']) / 2 if weather else 20.0
@@ -203,6 +242,10 @@ def plan_route(worker, orders, conf, date_str):
     check = dict(
         buffer_min=buffer_min,
         legs=legs,
+        orders=schedule_orders,
+        return_leg=return_leg,
+        totals=dict(distance_km=round(total_ride_km, 2), ride_minutes=total_ride_min,
+                    work_minutes=day_work_min, income_cents=income_cents),
         ok=sum(1 for l in legs if l['status'] == 'ok'),
         tight=sum(1 for l in legs if l['status'] == 'tight'),
         late=sum(1 for l in legs if l['status'] == 'late'),

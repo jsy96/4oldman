@@ -298,6 +298,15 @@ const Worker = {
             interactive: false,
           }).addTo(map);
         });
+        if (plan.return_leg) {
+          const rl = plan.return_leg;
+          L.polyline([[rl.from_lat, rl.from_lng], [rl.to_lat, rl.to_lng]],
+                     { color: '#94a3b8', weight: 3, dashArray: '4 6' }).addTo(map);
+          L.marker([(rl.from_lat + rl.to_lat) / 2, (rl.from_lng + rl.to_lng) / 2], {
+            icon: L.divIcon({ className: '', html: `<div class="leg-label">≈${rl.travel_min}分 · 返程</div>`, iconSize: [0, 0] }),
+            interactive: false,
+          }).addTo(map);
+        }
         map.fitBounds(pts, { padding: [30, 30] });
       }, 60);
     }
@@ -307,25 +316,16 @@ const Worker = {
     const box = document.getElementById('rt-check');
     if (!box) return;
     const c = plan.check;
-    if (!c || !c.legs.length) {
-      box.innerHTML = '<div class="card"><div class="empty">当天不足两单，无需检查间隔</div></div>';
+    if (!c || !(c.orders || []).length) {
+      box.innerHTML = '<div class="card"><div class="empty">当天没有可检查的订单</div></div>';
       return;
     }
-    const badge = st => st === 'ok' ? '<span class="chip green">合理</span>'
-      : st === 'tight' ? '<span class="chip amber">偏紧</span>' : '<span class="chip red">会迟到</span>';
     box.innerHTML = `
       <div class="card">
         <h3>时间安排检查 ${c.reasonable
           ? '<span class="chip green">✅ 全部合理</span>'
           : `<span class="chip red">迟到 ${c.late} 段</span> <span class="chip amber">偏紧 ${c.tight} 段</span>`}</h3>
-        ${c.legs.map(l => `
-          <div class="stop">
-            <div class="seq" style="background:${l.status === 'ok' ? 'var(--green)' : l.status === 'tight' ? 'var(--amber)' : 'var(--red)'}">${l.seq}</div>
-            <div class="body">
-              <div><b>${esc(l.from_label)} → ${esc(l.to_label)}</b> ${badge(l.status)}</div>
-              <div class="muted small">骑行 ${l.km} km · 预计 ${l.minutes} 分钟 · 间隔 ${l.available_min} 分钟 · 需 ≥ ${l.required_min} 分钟</div>
-            </div>
-          </div>`).join('')}
+        ${scheduleCheckHtml(c)}
       </div>`;
     box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   },
