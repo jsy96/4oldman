@@ -143,13 +143,15 @@ uv pip install --python .venv/Scripts/python.exe -r requirements.txt
 
 | 项 | 值 |
 |---|---|
-| 访问网址 | https://ajmj-d2g1eishpbe7677fe-1301305388.ap-shanghai.app.tcloudbase.com/eldercare |
-| 形态 | 环境内事件云函数 `eldercare`（Python3.9，入口 index.main_handler）+ HTTP 访问路由 `/eldercare` |
+| **正式网址** | **https://leige.online/**（自定义域名，已挂 ICP 备案号） |
+| 备用网址 | https://ajmj-d2g1eishpbe7677fe-1301305388.ap-shanghai.app.tcloudbase.com/eldercare |
+| 形态 | 环境内事件云函数 `eldercare`（Python3.9，入口 index.main_handler）+ HTTP 访问路由（leige.online 的 `/` 与 `/eldercare`、默认域名 `/eldercare`） |
+| 域名链路 | Cloudflare CNAME（灰云）→ 腾讯 CDN（dnsv1）→ TCB HTTP 网关 → 云函数；所有权 TXT `_cloudbase-challenge`；首页悬挂备案号 |
 | 数据库 | 微信云托管 TDSQL-C MySQL（**外网地址**，账号 jsy96），首次访问自动建表 |
 | 更新代码 | `.venv/Scripts/python.exe deploy_scf.py`（自动打包→更新函数→路由已存在则跳过） |
 | 同环境邻居 | `/qm-admin` 路由（queue-miniapp 项目），互不影响，已验证共存 |
 
-注意事项：① 函数冷启动首次访问约 3~8 秒；② 微信云托管 MySQL 若重建，内网/外网地址会变——改 `secrets.json` 的 `database_url` 后重跑 deploy_scf.py；③ 公网地址走 TDSQL-C 自带鉴权，务必保持密码强度。
+注意事项：① 函数冷启动首次访问约 3~8 秒；② 微信云托管 MySQL 若重建，内外网地址会变——改 `secrets.json` 的 `database_url` 后重跑 deploy_scf.py；③ 公网地址走 TDSQL-C 自带鉴权，务必保持密码强度；④ `www.leige.online` 未接（挂在 CF Worker 上），如需跳转主域可在该 Worker 配 301。
 
 ### 云开发环境「云托管」部署（MySQL 在云开发环境内时用这个）
 
