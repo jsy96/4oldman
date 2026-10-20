@@ -16,8 +16,11 @@ if (location.pathname !== '/' && !location.pathname.endsWith('/'))
 </head>
 <body>
 
+<!-- 启动占位（避免登录页闪现） -->
+<div id="boot-splash" class="boot-splash">正在打开颐养通…</div>
+
 <!-- 登录页 -->
-<div id="login-view" class="login-wrap">
+<div id="login-view" class="login-wrap" hidden>
   <div class="login-card">
     <div class="login-logo">颐</div>
     <h1>颐养通</h1>

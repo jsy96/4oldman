@@ -152,7 +152,7 @@ const Worker = {
   async renderRoute(el) {
     el.innerHTML = `
       <div class="card">
-        <h3>AI 行程路线 <span class="sub">骑电瓶车 · 自动排序/午餐/电量</span></h3>
+        <h3>AI 行程路线 <span class="sub">骑电瓶车 · 按预约时间排程/天气/电量</span></h3>
         <div class="row">
           <input type="date" id="rt-date" value="${tomorrowStr()}" style="max-width:180px">
           <button class="btn" id="rt-go">查看路线</button>

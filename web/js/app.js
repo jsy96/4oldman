@@ -77,9 +77,15 @@ function openModal(title, html, opts = {}) {
 }
 
 /* ---------- 登录 ---------- */
+function _hideBoot() {
+  const b = document.getElementById('boot-splash');
+  if (b) b.remove();
+}
+
 function showLogin() {
   $('#app-view').hidden = true;
   $('#login-view').hidden = false;
+  _hideBoot();
   $('#login-form').onsubmit = async e => {
     e.preventDefault();
     const err = $('#login-err');
@@ -101,6 +107,7 @@ function showLogin() {
 function showApp() {
   $('#login-view').hidden = true;
   $('#app-view').hidden = false;
+  _hideBoot();
   $('#brand-name').textContent = CONF.app_name;
   document.title = `${CONF.app_name} · ${ROLE_TEXT[ME.role]}`;
   $('#top-hello').textContent = `${ME.name}（${ROLE_TEXT[ME.role]}）`;

@@ -58,7 +58,7 @@ def fetch_weather(date_str, lat, lng):
 
 
 def _tsp_order(start, pts):
-    """最近邻 + 2-opt 顺序优化；返回下标访问顺序。"""
+    """保留用于未来「空闲时段顺路优化」；当前排程以预约时间为准（见 plan_route）。"""
     n = len(pts)
     if n <= 1:
         return list(range(n))
@@ -69,23 +69,6 @@ def _tsp_order(start, pts):
         seq.append(nxt)
         left.remove(nxt)
         cur = pts[nxt]
-
-    def length(s):
-        d, p = 0.0, start
-        for i in s:
-            d += haversine_km(p, pts[i])
-            p = pts[i]
-        return d
-
-    if n <= 12:
-        improved = True
-        while improved:
-            improved = False
-            for i in range(n - 1):
-                for j in range(i + 1, n):
-                    cand = seq[:i] + seq[i:j + 1][::-1] + seq[j + 1:]
-                    if length(cand) < length(seq) - 1e-9:
-                        seq, improved = cand, True
     return seq
 
 
@@ -143,15 +126,16 @@ def plan_route(worker, orders, conf, date_str):
 
     factor, total_km = conf['road_factor'], 0.0
     weather_factor = speeds['dry'] / speed if speed < speeds['dry'] else 1.0  # 恶劣天气放大耗时
-    seq = _tsp_order(start, pts)
+    # 按预约时间排序（预约是承诺，不按地理位置重排）；地理只用于估算相邻两单路程
+    ordered = sorted(valid, key=lambda o: o['sched_start'])
     prev, lunch_used = start, False
     amap_legs = 0
     markers = [dict(lat=start[0], lng=start[1], seq='🏠', home=True, customer=start_name)]
-    for k, idx in enumerate(seq):
-        o = valid[idx]
-        km = haversine_km(prev, pts[idx]) * factor
+    for k, o in enumerate(ordered):
+        pt = (o['lat'], o['lng'])
+        km = haversine_km(prev, pt) * factor
         leg_min = max(5, math.ceil(km / speed * 60))
-        ride = amap.bicycling(prev, pts[idx])  # 高德骑行路网（配了 Key 才有，GCJ-02 一致）
+        ride = amap.bicycling(prev, pt)  # 高德骑行路网（配了 Key 才有，GCJ-02 一致）
         if ride:
             km = ride[0] / 1000
             leg_min = max(3, round(ride[1] / 60 * weather_factor))
@@ -160,14 +144,18 @@ def plan_route(worker, orders, conf, date_str):
         arrive = clock + timedelta(minutes=leg_min)
         sched = datetime.strptime(o['sched_start'], '%Y-%m-%d %H:%M')
         svc_start = max(arrive, sched)
-        if (svc_start - arrive).total_seconds() > 45 * 60:
-            warnings.append(f'{o["customer_name"]} 计划到达比预约晚 '
-                            f'{int((svc_start - arrive).total_seconds() // 60)} 分钟，建议联系顾客调整')
+        late_min = int((svc_start - sched).total_seconds() // 60)
+        if late_min > 15:
+            warnings.append(f'{o["customer_name"]} 预约 {sched:%H:%M}，预计 {svc_start:%H:%M} 才到'
+                            f'（晚 {late_min} 分钟），建议联系顾客改时间或减少当日单量')
+        elif (sched - arrive).total_seconds() > 3600:
+            warnings.append(f'{o["customer_name"]} 将提前约 '
+                            f'{int((sched - arrive).total_seconds() // 60)} 分钟到达，可在附近稍候')
         depart, hit = _apply_lunch(svc_start, o['minutes'], lunch_s, lunch_e)
         if hit:
             lunch_used = True
         legs.append(dict(seq=k + 1, km=round(km, 2), minutes=leg_min))
-        markers.append(dict(lat=pts[idx][0], lng=pts[idx][1], seq=k + 1,
+        markers.append(dict(lat=pt[0], lng=pt[1], seq=k + 1,
                             customer=o['customer_name'], item=o['item_name'],
                             address=o.get('customer_address') or o.get('address') or ''))
         stops_out.append(dict(seq=k + 1, order_id=o['id'], customer=o['customer_name'],
@@ -177,7 +165,7 @@ def plan_route(worker, orders, conf, date_str):
                               sched=o['sched_start'], arrive=arrive.strftime('%H:%M'),
                               service_start=svc_start.strftime('%H:%M'),
                               depart=depart.strftime('%H:%M')))
-        clock, prev = depart, pts[idx]
+        clock, prev = depart, pt
 
     work_minutes = int((clock - datetime.strptime(conf['day_start'], '%H:%M').replace(
         year=d.year, month=d.month, day=d.day)).total_seconds() // 60) if stops_out else 0
@@ -198,8 +186,8 @@ def plan_route(worker, orders, conf, date_str):
 
     return dict(date=date_str, start_name=start_name, start=start, stops=stops_out, legs=legs,
                 markers=markers,
-                distance_source=('高德骑行实测' if amap_legs == len(seq) and amap_legs
-                                 else f'高德骑行/直线混合({amap_legs}/{len(seq)})' if amap_legs
+                distance_source=('高德骑行实测' if amap_legs == len(ordered) and amap_legs
+                                 else f'高德骑行/直线混合({amap_legs}/{len(ordered)})' if amap_legs
                                  else '直线×1.35估算'),
                 total_km=round(total_km, 2), work_minutes=work_minutes,
                 lunch=dict(start=conf['lunch']['start'], end=conf['lunch']['end'], used=lunch_used),
