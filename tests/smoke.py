@@ -303,10 +303,14 @@ call('post', '/api/login', data={'phone': '13700000002', 'password': '123456'}, 
 new_tok = login('13700000002', 'newpass123')
 t('验证码重置密码（旧密码失效）')
 call('get', '/api/me', c2_tok, expect=401)  # 重置后旧会话失效
+sent2 = call('post', '/api/auth/send-code', data={'phone': '13700000002', 'scene': 'change'})
+assert sent2.get('debug_code'), sent2
 call('post', '/api/auth/change-password', new_tok,
-     data={'old_password': 'newpass123', 'new_password': '123456'})
+     data={'code': '000000', 'new_password': '123456'}, expect=400)
+call('post', '/api/auth/change-password', new_tok,
+     data={'code': sent2['debug_code'], 'new_password': '123456'})
 assert login('13700000002', '123456')
-t('登录用户修改密码')
+t('登录用户修改密码（必须短信验证码）')
 
 import os as _os2
 _os2.environ.pop('CARE_SMS_DEBUG', None)

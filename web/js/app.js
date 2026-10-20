@@ -173,22 +173,57 @@ function switchTab(key) {
 }
 
 /* ---------- 密码管理 ---------- */
-function openChangePwdModal() {
-  openModal('修改密码', `
-    <label class="fl">原密码</label>
-    <input type="password" id="cp-old" autocomplete="current-password">
+async function openChangePwdModal() {
+  let phone = '';
+  try { phone = (await API.call('/api/me')).phone || ''; } catch (e) { /* 忽略 */ }
+  openModal('修改密码（短信验证）', `
+    <label class="fl">手机号（账号）</label>
+    <input type="tel" id="cp-phone" value="${esc(phone)}" readonly>
+    <label class="fl">短信验证码</label>
+    <div class="row">
+      <input type="text" id="cp-code" style="flex:1" placeholder="6 位验证码" inputmode="numeric">
+      <button type="button" class="btn btn-ghost" id="cp-send">发送验证码</button>
+    </div>
     <label class="fl">新密码（至少 6 位）</label>
     <input type="password" id="cp-new" autocomplete="new-password">
     <label class="fl">确认新密码</label>
-    <input type="password" id="cp-new2" autocomplete="new-password">`, {
-    okText: '保存',
+    <input type="password" id="cp-new2" autocomplete="new-password">
+    <div class="muted small" style="margin-top:8px">验证码发送到账号绑定的手机号，5 分钟内有效，1 分钟内只能发送一次。</div>`, {
+    okText: '修改密码',
+    onMount(box) {
+      box.querySelector('#cp-send').onclick = async () => {
+        if (!phone) { toast('未获取到手机号，请重新登录'); return; }
+        const btn = box.querySelector('#cp-send');
+        try {
+          const r = await API.call('/api/auth/send-code',
+            { method: 'POST', body: { phone, scene: 'change' } });
+          if (r.debug_code) {
+            box.querySelector('#cp-code').value = r.debug_code;
+            toast('调试模式：验证码已自动填入', true);
+          } else {
+            toast(r.message || '验证码已发送', true);
+          }
+          let left = 60;
+          btn.disabled = true;
+          btn.textContent = left + 's 后重发';
+          const t = setInterval(() => {
+            left -= 1;
+            if (left <= 0) { clearInterval(t); btn.disabled = false; btn.textContent = '发送验证码'; }
+            else btn.textContent = left + 's 后重发';
+          }, 1000);
+        } catch (e) { toast(e.message); }
+      };
+    },
     onOk: async () => {
-      const o = $('#cp-old').value, n = $('#cp-new').value, n2 = $('#cp-new2').value;
-      if (!o || !n) { toast('请填写完整'); return false; }
+      const code = $('#cp-code').value.trim();
+      const n = $('#cp-new').value;
+      const n2 = $('#cp-new2').value;
+      if (!code) { toast('请输入短信验证码'); return false; }
+      if (!n) { toast('请输入新密码'); return false; }
       if (n !== n2) { toast('两次输入的新密码不一致'); return false; }
       try {
         await API.call('/api/auth/change-password',
-          { method: 'POST', body: { old_password: o, new_password: n } });
+          { method: 'POST', body: { code, new_password: n } });
         toast('密码已修改', true);
         closeModal();
       } catch (e) { toast(e.message); }

@@ -99,7 +99,7 @@ def send_code():
     user = db.execute('SELECT id, active FROM users WHERE phone=?', (phone,)).fetchone()
     if user is not None and not user['active']:
         return jsonify(error='账号已停用，请联系管理员'), 403
-    if scene == 'reset' and user is None:
+    if user is None:
         # 不暴露手机号是否注册
         return jsonify(ok=True, message='若该手机号已注册，验证码将发送')
     now_epoch = int(time.time())
@@ -182,16 +182,18 @@ def reset_password():
 @bp.post('/api/auth/change-password')
 @auth_required()
 def change_password():
-    """已登录：原密码 + 新密码修改。"""
+    """已登录：手机验证码 + 新密码（等同重置密码，不再使用原密码）。"""
     d = request.get_json(force=True, silent=True) or {}
-    old = d.get('old_password') or ''
+    code = (d.get('code') or '').strip()
     new = d.get('new_password') or ''
+    if not code:
+        return jsonify(error='请输入短信验证码'), 400
     if len(new) < 6:
         return jsonify(error='新密码至少 6 位'), 400
     db = get_db()
-    row = db.execute('SELECT password_hash FROM users WHERE id=?', (g.user['id'],)).fetchone()
-    if not check_password_hash(row['password_hash'], old):
-        return jsonify(error='原密码错误'), 400
+    ok, err = _check_code(db, g.user['phone'], 'change', code)
+    if not ok:
+        return jsonify(error=err), 400
     db.execute('UPDATE users SET password_hash=? WHERE id=?',
                (generate_password_hash(new, method=HASH_METHOD), g.user['id']))
     db.execute('DELETE FROM sessions WHERE user_id=? AND token!=?', (g.user['id'], g.token))
