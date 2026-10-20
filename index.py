@@ -21,11 +21,18 @@ def _app():
     return _flask
 
 
+_KNOWN = ('/api', '/css', '/js', '/vendor', '/img')  # 应用真实路由前缀
+
+
 def _strip(path):
+    """优先用 STRIP_PREFIX；否则自动剥掉路径第一段（HTTP 云函数 URL 里的函数名前缀）。"""
     prefix = os.environ.get('STRIP_PREFIX', '')
     if prefix and path.startswith(prefix):
         return path[len(prefix):] or '/'
-    return path
+    if path == '/' or any(path == k or path.startswith(k + '/') for k in _KNOWN):
+        return path
+    seg = path.split('/', 2)  # /eldercare/api/meta → ['', 'eldercare', 'api/meta']
+    return '/' + (seg[2] if len(seg) > 2 else '')
 
 
 def main_handler(event, context):
