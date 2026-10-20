@@ -37,7 +37,7 @@ def overview():
 
 def _order_list(where, params):
     rows = get_db().execute(
-        'SELECT o.*, si.name AS item_name, si.minutes, uc.name AS customer_name, '
+        'SELECT o.*, si.name AS item_name, o.duration_minutes AS minutes, uc.name AS customer_name, '
         'uc.phone AS customer_phone, uc.address AS customer_address, uc.lat, uc.lng '
         'FROM orders o JOIN service_items si ON si.id=o.item_id '
         'JOIN users uc ON uc.id=o.customer_id WHERE ' + where + ' ORDER BY o.sched_start',
@@ -145,7 +145,7 @@ def route():
     except ValueError:
         return jsonify(error='日期格式不正确'), 400
     rows = get_db().execute(
-        "SELECT o.*, si.name AS item_name, si.minutes, uc.name AS customer_name, "
+        "SELECT o.*, si.name AS item_name, o.duration_minutes AS minutes, uc.name AS customer_name, "
         'uc.phone AS customer_phone, uc.address AS customer_address, uc.lat, uc.lng '
         'FROM orders o JOIN service_items si ON si.id=o.item_id '
         'JOIN users uc ON uc.id=o.customer_id WHERE o.worker_id=? AND '

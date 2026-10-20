@@ -10,6 +10,30 @@ def now_str():
     return datetime.now().strftime('%Y-%m-%d %H:%M')
 
 
+class InsufficientBalance(Exception):
+    """下单时余额不足。"""
+
+    def __init__(self, price_cents, balance_cents):
+        self.price_cents, self.balance_cents = price_cents, balance_cents
+        super().__init__(f'余额不足：需 {price_cents} 分，当前 {balance_cents} 分')
+
+
+def quote(item, duration_min):
+    """服务金额 = 项目单价（元/小时）× 时长；酬金按默认时长等比缩放。"""
+    std = item['minutes'] or 60
+    unit = item['unit_price_cents'] if 'unit_price_cents' in item.keys() else 0
+    if not unit:
+        unit = int(round(item['price_cents'] * 60.0 / std))
+    price = int(round(unit * duration_min / 60.0))
+    pay = int(round((item['worker_pay_cents'] or 0) * duration_min / float(std)))
+    return price, pay
+
+
+def balance_of(customer_id):
+    row = get_db().execute('SELECT balance_cents FROM users WHERE id=?', (customer_id,)).fetchone()
+    return row['balance_cents'] if row else 0
+
+
 def log_order(order_id, actor, action, detail=''):
     db = get_db()
     db.execute('INSERT INTO order_logs(order_id,actor,action,detail,created_at) VALUES(?,?,?,?,?)',
@@ -63,19 +87,24 @@ def suggest_slots(worker_id, want_dt, duration_min, limit=3):
     return [s.strftime('%H:%M') for s in slots[:limit]]
 
 
-def create_order(customer, worker, item, start_dt, note, actor):
+def create_order(customer, worker, item, start_dt, duration_min, note, actor):
+    """创建订单。金额=单价×时长；余额不足抛 InsufficientBalance，调用方回滚即可。"""
     db = get_db()
-    price, pay = item['price_cents'], item['worker_pay_cents']
-    end_dt = start_dt + timedelta(minutes=item['minutes'])
+    price, pay = quote(item, duration_min)
+    balance = balance_of(customer['id'])
+    if balance < price:
+        raise InsufficientBalance(price, balance)
+    end_dt = start_dt + timedelta(minutes=duration_min)
     oid = insert_returning_id(
         db,
-        'INSERT INTO orders(customer_id,worker_id,item_id,sched_start,sched_end,status,'
+        'INSERT INTO orders(customer_id,worker_id,item_id,sched_start,sched_end,duration_minutes,status,'
         'price_cents,worker_pay_cents,note,created_at,updated_at) '
-        "VALUES(?,?,?,?,?, 'pending',?,?,?,?,?)",
+        "VALUES(?,?,?,?,?,?, 'pending',?,?,?,?,?)",
         (customer['id'], worker['id'], item['id'], start_dt.strftime('%Y-%m-%d %H:%M'),
-         end_dt.strftime('%Y-%m-%d %H:%M'), price, pay, note or '', now_str(), now_str()))
+         end_dt.strftime('%Y-%m-%d %H:%M'), duration_min, price, pay, note or '', now_str(), now_str()))
     log_order(oid, actor, '下单', f'{customer["name"]} 预约 {item["name"]} '
-                f'{start_dt.strftime("%Y-%m-%d %H:%M")}，服务员 {worker["name"]}')
+                f'{start_dt.strftime("%Y-%m-%d %H:%M")}（{duration_min}分钟，'
+                f'{price / 100:.2f}元），服务员 {worker["name"]}')
     return oid
 
 
@@ -107,7 +136,7 @@ def cancel_order(order, actor, reason, refund=True):
 
 def get_order_or_404(order_id):
     row = get_db().execute(
-        'SELECT o.*, si.name AS item_name, si.minutes, '
+        'SELECT o.*, si.name AS item_name, o.duration_minutes AS minutes, '
         'uc.name AS customer_name, uc.phone AS customer_phone, uc.address AS customer_address, '
         'uw.name AS worker_name FROM orders o '
         'JOIN service_items si ON si.id=o.item_id '

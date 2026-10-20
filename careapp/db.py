@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS service_items(
   name TEXT NOT NULL,
   minutes INTEGER NOT NULL,
   price_cents INTEGER NOT NULL,
+  unit_price_cents INTEGER NOT NULL DEFAULT 0,
   worker_pay_cents INTEGER NOT NULL DEFAULT 0,
   active INTEGER NOT NULL DEFAULT 1
 );
@@ -56,6 +57,7 @@ CREATE TABLE IF NOT EXISTS orders(
   item_id INTEGER NOT NULL REFERENCES service_items(id),
   sched_start TEXT NOT NULL,
   sched_end TEXT NOT NULL,
+  duration_minutes INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL CHECK(status IN ('pending','confirmed','completed','exception','cancelled')),
   exception_type TEXT,
   exception_note TEXT,
@@ -272,6 +274,39 @@ def _run_script(db, sql):
         db.execute(s)
 
 
+def _has_column(db, table, col):
+    if db.kind == 'sqlite':
+        return any(r['name'] == col for r in db.execute(f'PRAGMA table_info({table})').fetchall())
+    if db.kind == 'mysql':
+        return db.execute('SELECT COUNT(*) AS c FROM information_schema.columns '
+                          'WHERE table_schema=DATABASE() AND table_name=? AND column_name=?',
+                          (table, col)).fetchone()['c'] > 0
+    return db.execute('SELECT COUNT(*) AS c FROM information_schema.columns '
+                      'WHERE table_name=? AND column_name=?', (table, col)).fetchone()['c'] > 0
+
+
+def _migrate(db):
+    """增量迁移：服务项目单价（元/小时）、订单时长字段。"""
+    if not _has_column(db, 'service_items', 'unit_price_cents'):
+        db.execute('ALTER TABLE service_items ADD COLUMN unit_price_cents INTEGER NOT NULL DEFAULT 0')
+    if not _has_column(db, 'orders', 'duration_minutes'):
+        db.execute('ALTER TABLE orders ADD COLUMN duration_minutes INTEGER NOT NULL DEFAULT 0')
+    # 旧项目：按「原价 / 原标准时长」折算每小时单价（取整到元）
+    for r in db.execute('SELECT id, minutes, price_cents, unit_price_cents FROM service_items').fetchall():
+        if not r['unit_price_cents'] and r['minutes']:
+            unit = int(round(r['price_cents'] * 60.0 / r['minutes'] / 100.0)) * 100
+            db.execute('UPDATE service_items SET unit_price_cents=? WHERE id=?', (unit, r['id']))
+    # 旧订单：从预约起止时间反推时长
+    for r in db.execute('SELECT id, sched_start, sched_end FROM orders WHERE duration_minutes=0').fetchall():
+        try:
+            s = datetime.strptime(r['sched_start'], '%Y-%m-%d %H:%M')
+            e = datetime.strptime(r['sched_end'], '%Y-%m-%d %H:%M')
+            db.execute('UPDATE orders SET duration_minutes=? WHERE id=?',
+                       (int((e - s).total_seconds() // 60), r['id']))
+        except (TypeError, ValueError):
+            pass
+
+
 def init_db(app):
     """启动时建表；空库自动写入演示数据。三种数据库同一套逻辑。"""
     url = database_url()
@@ -292,6 +327,7 @@ def init_db(app):
         conn.execute('PRAGMA foreign_keys=ON')
         db = DB(conn, 'sqlite')
         _run_script(db, SCHEMA_SQLITE)
+    _migrate(db)
     try:
         if db.execute('SELECT COUNT(*) AS c FROM users').fetchone()['c'] == 0:
             seed(db)
@@ -324,16 +360,17 @@ def seed(db):
     c4 = u('13800002004', '123456', 'customer', '郑国强', '青山区和平大道300号', lat0 - 0.008, lng0 + 0.020, w2)
 
     items = {}
-    for name, minutes, price, pay in [
-        ('上门助浴', 60, 8000, 4500),
-        ('居家保洁', 90, 7000, 4000),
-        ('陪同就医', 120, 10000, 6000),
-        ('康复理疗', 60, 9000, 5500),
-        ('助餐配送', 20, 2000, 800),
+    for name, minutes, price, unit, pay in [
+        ('上门助浴', 60, 8000, 8000, 4500),
+        ('居家保洁', 90, 7000, 4700, 4000),
+        ('陪同就医', 120, 10000, 5000, 6000),
+        ('康复理疗', 60, 9000, 9000, 5500),
+        ('助餐配送', 20, 2000, 6000, 800),
     ]:
         iid = insert_returning_id(
-            db, 'INSERT INTO service_items(name,minutes,price_cents,worker_pay_cents) VALUES(?,?,?,?)',
-            (name, minutes, price, pay))
+            db, 'INSERT INTO service_items(name,minutes,price_cents,unit_price_cents,worker_pay_cents) '
+                'VALUES(?,?,?,?,?)',
+            (name, minutes, price, unit, pay))
         items[name] = (iid, minutes, price, pay)
 
     def order(cid, wid, item, day, hm, status, paid=0):
@@ -341,9 +378,11 @@ def seed(db):
         start = f'{day} {hm}'
         end_min = datetime.strptime(start, '%Y-%m-%d %H:%M') + timedelta(minutes=minutes)
         oid = insert_returning_id(
-            db, 'INSERT INTO orders(customer_id,worker_id,item_id,sched_start,sched_end,status,'
-                'price_cents,worker_pay_cents,paid,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
-            (cid, wid, iid, start, end_min.strftime('%Y-%m-%d %H:%M'), status, price, pay, paid, now, now))
+            db, 'INSERT INTO orders(customer_id,worker_id,item_id,sched_start,sched_end,duration_minutes,'
+                'status,price_cents,worker_pay_cents,paid,created_at,updated_at) '
+                'VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+            (cid, wid, iid, start, end_min.strftime('%Y-%m-%d %H:%M'), minutes, status, price, pay,
+             paid, now, now))
         db.execute('INSERT INTO order_logs(order_id,actor,action,detail,created_at) VALUES(?,?,?,?,?)',
                    (oid, '系统', '初始化', '示例数据', now))
         return oid, price

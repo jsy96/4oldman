@@ -163,23 +163,31 @@ def items():
     return jsonify(items=[dict(r) for r in rows])
 
 
+def _item_payload(d):
+    name = (d.get('name') or '').strip()
+    if not name:
+        raise ValueError('请填写项目名称')
+    if not (isinstance(d.get('minutes'), int) and 0 < d['minutes'] <= 480):
+        raise ValueError('默认时长必须为 1~480 分钟')
+    if not (isinstance(d.get('unit_price_cents'), int) and d['unit_price_cents'] > 0):
+        raise ValueError('单价必须为正整数（分/小时）')
+    pay = d.get('worker_pay_cents') or 0
+    if not isinstance(pay, int) or pay < 0:
+        raise ValueError('酬金必须为非负整数（分）')
+    return name, d['minutes'], d['unit_price_cents'], pay
+
+
 @bp.post('/items')
 @auth_required('admin')
 def create_item():
     d = request.get_json(force=True, silent=True) or {}
-    name = (d.get('name') or '').strip()
-    if not name:
-        return jsonify(error='请填写项目名称'), 400
-    if not (isinstance(d.get('minutes'), int) and d['minutes'] > 0):
-        return jsonify(error='服务时长必须为正整数（分钟）'), 400
-    if not (isinstance(d.get('price_cents'), int) and d['price_cents'] > 0):
-        return jsonify(error='价格必须为正整数（分）'), 400
-    pay = d.get('worker_pay_cents') or 0
-    if not isinstance(pay, int) or pay < 0:
-        return jsonify(error='酬金必须为非负整数（分）'), 400
+    try:
+        name, minutes, unit, pay = _item_payload(d)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
     db = get_db()
-    db.execute('INSERT INTO service_items(name,minutes,price_cents,worker_pay_cents) VALUES(?,?,?,?)',
-               (name, d['minutes'], d['price_cents'], pay))
+    db.execute('INSERT INTO service_items(name,minutes,price_cents,unit_price_cents,worker_pay_cents) '
+               'VALUES(?,?,?,?,?)', (name, minutes, unit, unit, pay))
     db.commit()
     return jsonify(ok=True)
 
@@ -191,12 +199,13 @@ def update_item(iid):
     db = get_db()
     if db.execute('SELECT 1 FROM service_items WHERE id=?', (iid,)).fetchone() is None:
         return jsonify(error='项目不存在'), 404
-    name = (d.get('name') or '').strip()
-    if not name:
-        return jsonify(error='请填写项目名称'), 400
-    db.execute('UPDATE service_items SET name=?, minutes=?, price_cents=?, worker_pay_cents=?, active=? '
-               'WHERE id=?', (name, int(d['minutes']), int(d['price_cents']),
-                              int(d.get('worker_pay_cents') or 0), 1 if d.get('active', 1) else 0, iid))
+    try:
+        name, minutes, unit, pay = _item_payload(d)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    db.execute('UPDATE service_items SET name=?, minutes=?, price_cents=?, unit_price_cents=?, '
+               'worker_pay_cents=?, active=? WHERE id=?',
+               (name, minutes, unit, unit, pay, 1 if d.get('active', 1) else 0, iid))
     db.commit()
     return jsonify(ok=True)
 
@@ -262,15 +271,58 @@ def create_order():
         return jsonify(error='服务项目不存在或已下架'), 400
     try:
         start_dt = datetime.strptime(f"{d.get('date')} {d.get('time')}", '%Y-%m-%d %H:%M')
+        duration = int(d.get('duration_minutes') or item['minutes'])
+        if duration < 15 or duration > 480:
+            raise ValueError
     except (TypeError, ValueError):
-        return jsonify(error='日期时间格式不正确'), 400
+        return jsonify(error='日期时间或时长格式不正确'), 400
     worker = db.execute('SELECT * FROM users WHERE id=?', (customer['worker_id'],)).fetchone()
-    conflicts = services.get_conflicts(worker['id'], start_dt,
-                                       start_dt + timedelta(minutes=item['minutes']))
-    oid = services.create_order(dict(customer), dict(worker), dict(item), start_dt,
-                                d.get('note') or '', f'管理员{g.user["name"]}代下单')
+    end_dt = start_dt + timedelta(minutes=duration)
+    conflicts = services.get_conflicts(worker['id'], start_dt, end_dt)
+    if conflicts and not d.get('force'):
+        return jsonify(error='该时段与服务员其它预约冲突（需间隔30分钟以上）',
+                       conflicts=conflicts,
+                       suggestions=services.suggest_slots(worker['id'], start_dt, duration)), 409
+    try:
+        oid = services.create_order(dict(customer), dict(worker), dict(item), start_dt, duration,
+                                    d.get('note') or '', f'管理员{g.user["name"]}代下单')
+    except services.InsufficientBalance as e:
+        return jsonify(error=f'顾客账户余额不足：本次需 ¥{e.price_cents / 100:.2f}，'
+                             f'当前余额 ¥{e.balance_cents / 100:.2f}，请先充值',
+                       balance_cents=e.balance_cents, required_cents=e.price_cents), 400
     db.commit()
-    return jsonify(ok=True, order=services.get_order_or_404(oid), conflict_warning=conflicts or None)
+    return jsonify(ok=True, order=services.get_order_or_404(oid))
+
+
+@bp.get('/check-conflict')
+@auth_required('admin')
+def check_conflict():
+    """管理员代下单前的一键冲突检查。"""
+    db = get_db()
+    customer = db.execute("SELECT * FROM users WHERE id=? AND role='customer'",
+                          (request.args.get('customer_id'),)).fetchone()
+    if customer is None or not customer['worker_id']:
+        return jsonify(error='顾客不存在或未指派服务员'), 400
+    item = db.execute('SELECT * FROM service_items WHERE id=? AND active=1',
+                      (request.args.get('item_id'),)).fetchone()
+    if item is None:
+        return jsonify(error='请选择服务项目'), 400
+    try:
+        start_dt = datetime.strptime(
+            f"{request.args.get('date')} {request.args.get('time')}", '%Y-%m-%d %H:%M')
+        duration = int(request.args.get('duration') or item['minutes'])
+        if duration < 15 or duration > 480:
+            raise ValueError
+    except (TypeError, ValueError):
+        return jsonify(error='日期、时间或时长格式不正确'), 400
+    end_dt = start_dt + timedelta(minutes=duration)
+    conflicts = services.get_conflicts(customer['worker_id'], start_dt, end_dt)
+    price, _ = services.quote(dict(item), duration)
+    return jsonify(available=not conflicts, conflicts=conflicts,
+                   suggestions=[] if not conflicts else
+                   services.suggest_slots(customer['worker_id'], start_dt, duration),
+                   price_cents=price, duration_minutes=duration,
+                   balance_cents=customer['balance_cents'])
 
 
 @bp.get('/orders/<int:oid>/logs')

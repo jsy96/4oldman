@@ -66,13 +66,24 @@ call('post', '/api/c/orders', c1,
      data={'item_id': item['id'], 'date': tomorrow, 'time': r['suggestions'][0]})
 t('按建议时段下单成功')
 
-# 周明德（同属服务员1）挤同一时段 → 冲突；force 后成功但带提醒
+# 周明德（同属服务员1）挤同一时段 → 冲突；顾客端强制也拒绝（30分钟间隔为硬规则）
 call('post', '/api/c/orders', c2,
      data={'item_id': item2['id'], 'date': tomorrow, 'time': '09:00'}, expect=409)
-forced = call('post', '/api/c/orders', c2,
-              data={'item_id': item2['id'], 'date': tomorrow, 'time': '09:00', 'force': True})
-assert forced['order']['conflict_warning'], 'force 下单应保留冲突提醒'
-t('强制下单保留冲突提醒')
+call('post', '/api/c/orders', c2,
+     data={'item_id': item2['id'], 'date': tomorrow, 'time': '09:00', 'force': True}, expect=409)
+t('顾客端冲突强制拒绝（间隔30分钟硬规则）')
+
+# 一键冲突检查接口
+chk = call('get', f'/api/c/check-conflict?item_id={item["id"]}&date={tomorrow}&time=09:30&duration=60', c1)
+assert chk['available'] is False and chk['conflicts'] and chk['suggestions']
+chk2 = call('get', f'/api/c/check-conflict?item_id={item["id"]}&date={d_after}&time=10:00&duration=60', c1)
+assert chk2['available'] is True and chk2['price_cents'] == 8000
+t('一键冲突检查（可用/冲突+建议+金额）')
+
+# 时长计价：90分钟 × 80元/小时 = 120元
+calc = call('get', f'/api/c/check-conflict?item_id={item["id"]}&date={d_after}&time=10:00&duration=90', c1)
+assert calc['price_cents'] == 12000, calc
+t('时长计价 = 单价 × 时长')
 
 assert 'balance_cents' in call('get', '/api/c/summary', c1)
 txs = call('get', '/api/c/transactions', c1)['transactions']
@@ -131,9 +142,20 @@ dmy = login('13800008888', '123456')
 assert call('get', '/api/me', dmy)['name'] == '测试奶奶'
 t('新增服务员/顾客+指派+改资料+可登录')
 
+# 新顾客余额为 0：顾客自下单与管理员代下单都必须被拒
+call('post', '/api/c/orders', dmy,
+     data={'item_id': item['id'], 'date': d_after, 'time': '10:00'}, expect=400)
+call('post', '/api/a/orders', admin,
+     data={'customer_id': new_c['id'], 'item_id': item['id'],
+           'date': d_after, 'time': '10:00'}, expect=400)
+t('余额不足禁止下单（顾客端+管理端）')
+
+# 充值后可下单
+call('post', '/api/a/recharge', admin,
+     data={'customer_ids': [new_c['id']], 'amount_cents': 50000, 'note': '测试充值'})
 proxy = call('post', '/api/a/orders', admin,
              data={'customer_id': new_c['id'], 'item_id': item['id'],
-                   'date': d_after, 'time': '10:00'})
+                   'date': d_after, 'time': '10:00', 'duration_minutes': 60})
 proxy_oid = proxy['order']['id']
 t('管理员代下单')
 
@@ -195,10 +217,10 @@ call('post', f'/api/c/orders/{cancelme["order"]["id"]}/cancel', c1)
 t('顾客自行取消订单')
 
 call('post', '/api/a/items', admin, data={'name': '代购跑腿', 'minutes': 30,
-                                          'price_cents': 3000, 'worker_pay_cents': 1500})
+                                          'unit_price_cents': 6000, 'worker_pay_cents': 1500})
 iid = call('get', '/api/a/items', admin)['items'][-1]['id']
 call('put', f'/api/a/items/{iid}', admin, data={'name': '代购跑腿2', 'minutes': 30,
-                                                'price_cents': 3000, 'worker_pay_cents': 1500})
+                                                'unit_price_cents': 6000, 'worker_pay_cents': 1500})
 call('delete', f'/api/a/items/{iid}', admin)
 t('服务项目增改停用')
 

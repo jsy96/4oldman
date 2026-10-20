@@ -34,7 +34,8 @@ def summary():
 def orders():
     rows = get_db().execute(
         'SELECT o.id, o.sched_start, o.sched_end, o.status, o.price_cents, o.note, '
-        'o.exception_type, si.name AS item_name, si.minutes, uw.name AS worker_name '
+        'o.exception_type, si.name AS item_name, o.duration_minutes AS minutes, '
+        'uw.name AS worker_name '
         'FROM orders o JOIN service_items si ON si.id=o.item_id '
         'JOIN users uw ON uw.id=o.worker_id WHERE o.customer_id=? ORDER BY o.sched_start DESC',
         (g.user['id'],)).fetchall()
@@ -64,6 +65,50 @@ def service_items():
     return jsonify(items=[dict(r) for r in rows])
 
 
+def _parse_booking(item):
+    """解析并校验 日期/时间/时长，返回 (start_dt, duration)。"""
+    d = request.get_json(force=True, silent=True) or {}
+    try:
+        start_dt = datetime.strptime(f"{d.get('date')} {d.get('time')}", '%Y-%m-%d %H:%M')
+    except (TypeError, ValueError):
+        raise ValueError('日期时间格式不正确')
+    try:
+        duration = int(d.get('duration_minutes') or item['minutes'])
+    except (TypeError, ValueError):
+        raise ValueError('服务时长格式不正确')
+    if duration < 15 or duration > 480:
+        raise ValueError('服务时长需在 15~480 分钟之间')
+    return start_dt, duration
+
+
+@bp.get('/check-conflict')
+@auth_required('customer')
+def check_conflict():
+    """一键检查：所选时段是否与该服务员其它预约冲突（间隔不足30分钟即冲突）。"""
+    db = get_db()
+    item = db.execute('SELECT * FROM service_items WHERE id=? AND active=1',
+                      (request.args.get('item_id'),)).fetchone()
+    if item is None:
+        return jsonify(error='请选择服务项目'), 400
+    try:
+        start_dt = datetime.strptime(
+            f"{request.args.get('date')} {request.args.get('time')}", '%Y-%m-%d %H:%M')
+        duration = int(request.args.get('duration') or item['minutes'])
+        if duration < 15 or duration > 480:
+            raise ValueError
+    except (TypeError, ValueError):
+        return jsonify(error='日期、时间或时长格式不正确'), 400
+    if not g.user['worker_id']:
+        return jsonify(error='管理员还未给您指派服务员'), 400
+    end_dt = start_dt + timedelta(minutes=duration)
+    conflicts = services.get_conflicts(g.user['worker_id'], start_dt, end_dt)
+    return jsonify(available=not conflicts, conflicts=conflicts,
+                   suggestions=[] if not conflicts else
+                   services.suggest_slots(g.user['worker_id'], start_dt, duration),
+                   price_cents=services.quote(dict(item), duration)[0],
+                   duration_minutes=duration)
+
+
 @bp.post('/orders')
 @auth_required('customer')
 def book():
@@ -76,25 +121,29 @@ def book():
     if not g.user['worker_id']:
         return jsonify(error='管理员还未给您指派服务员，请稍后再试或联系客服'), 400
     try:
-        start_dt = datetime.strptime(f"{d.get('date')} {d.get('time')}", '%Y-%m-%d %H:%M')
-    except (TypeError, ValueError):
-        return jsonify(error='日期时间格式不正确'), 400
+        start_dt, duration = _parse_booking(dict(item, **d))
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
     if start_dt < datetime.now():
         return jsonify(error='不能预约过去的时间'), 400
 
     worker = db.execute('SELECT * FROM users WHERE id=?', (g.user['worker_id'],)).fetchone()
-    end_dt = start_dt + timedelta(minutes=item['minutes'])
+    end_dt = start_dt + timedelta(minutes=duration)
     conflicts = services.get_conflicts(worker['id'], start_dt, end_dt)
-    if conflicts and not d.get('force'):
-        return jsonify(error='所选时间段与您服务员的其它预约冲突',
+    if conflicts:
+        # 同一服务员不同顾客之间必须间隔 30 分钟以上，冲突即拒绝
+        return jsonify(error='所选时间段与您服务员的其它预约冲突（需间隔30分钟以上）',
                        conflicts=conflicts,
-                       suggestions=services.suggest_slots(worker['id'], start_dt, item['minutes'])), 409
-    oid = services.create_order(g.user, dict(worker), dict(item), start_dt, d.get('note') or '',
-                                g.user['name'])
+                       suggestions=services.suggest_slots(worker['id'], start_dt, duration)), 409
+    try:
+        oid = services.create_order(g.user, dict(worker), dict(item), start_dt, duration,
+                                    d.get('note') or '', g.user['name'])
+    except services.InsufficientBalance as e:
+        return jsonify(error=f'账户余额不足：本次需 ¥{e.price_cents / 100:.2f}，'
+                             f'当前余额 ¥{e.balance_cents / 100:.2f}，请联系管理员充值后再预约',
+                       balance_cents=e.balance_cents, required_cents=e.price_cents), 400
     db.commit()
-    order = services.get_order_or_404(oid)
-    order['conflict_warning'] = conflicts or None
-    return jsonify(ok=True, order=order)
+    return jsonify(ok=True, order=services.get_order_or_404(oid))
 
 
 @bp.post('/orders/<int:oid>/cancel')

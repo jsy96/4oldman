@@ -106,7 +106,7 @@ const Admin = {
           <div><label class="fl">状态</label><select id="od-status">
             <option value="">全部</option>
             <option value="pending">待确认</option><option value="confirmed">已确认</option>
-            <option value="completed">已完成</option><option value="exception" selected>异常</option>
+            <option value="completed">已完成</option><option value="exception">异常</option>
             <option value="cancelled">已取消</option></select></div>
           <div><label class="fl">服务员</label><select id="od-worker">
             <option value="">全部</option>
@@ -221,34 +221,108 @@ const Admin = {
   },
 
   newOrderModal(done) {
+    const items = this.cache.items.filter(i => i.active);
+    const customers = this.cache.customers.filter(c => c.active);
+    const durOpts = it => [...new Set([it.minutes, 30, 60, 90, 120, 150, 180, 240])]
+      .filter(d => d >= 15 && d <= 480).sort((a, b) => a - b);
     openModal('代顾客下单', `
       <label class="fl">顾客</label>
-      <select id="no-customer">${this.cache.customers.filter(c => c.active)
-        .map(c => `<option value="${c.id}">${esc(c.name)}（${c.worker_name ? '服务员：' + esc(c.worker_name) : '未指派'}）</option>`).join('')}</select>
+      <select id="no-customer">${customers
+        .map(c => `<option value="${c.id}">${esc(c.name)}（余额 ¥${fmtMoney(c.balance_cents)}${c.worker_name ? ' · ' + esc(c.worker_name) : ' · 未指派'}）</option>`).join('')}</select>
       <label class="fl">服务项目</label>
-      <select id="no-item">${this.cache.items.filter(i => i.active)
-        .map(i => `<option value="${i.id}">${esc(i.name)} · ¥${fmtMoney(i.price_cents)} / ${i.minutes}分钟</option>`).join('')}</select>
+      <select id="no-item">${items
+        .map(i => `<option value="${i.id}">${esc(i.name)} · ¥${fmtMoney(i.unit_price_cents)}/小时</option>`).join('')}</select>
+      <div class="frow">
+        <div><label class="fl">服务时长</label><select id="no-dur"></select></div>
+        <div><label class="fl">本次金额</label>
+          <div style="padding-top:9px"><b id="no-amount" style="font-size:18px;color:var(--primary)">¥0.00</b></div>
+        </div>
+      </div>
       <div class="frow">
         <div><label class="fl">日期</label><input type="date" id="no-date" min="${todayStr()}" value="${tomorrowStr()}"></div>
         <div><label class="fl">时间</label><input type="time" id="no-time" value="09:00" step="1800"></div>
       </div>
+      <div id="no-check" class="info-box" hidden></div>
+      <button type="button" class="btn btn-plain btn-small" id="no-check-btn" style="margin-top:8px">🔍 一键检查时间是否冲突</button>
+      <div id="no-balance" class="muted small" style="margin-top:8px"></div>
       <label class="fl">备注（选填）</label>
       <textarea id="no-note"></textarea>`, {
       okText: '下单',
+      onMount(box) {
+        const itemSel = box.querySelector('#no-item');
+        const custSel = box.querySelector('#no-customer');
+        const durSel = box.querySelector('#no-dur');
+        const amountEl = box.querySelector('#no-amount');
+        const balanceEl = box.querySelector('#no-balance');
+        const checkBox = box.querySelector('#no-check');
+        const curItem = () => items.find(i => i.id === +itemSel.value);
+        const curCust = () => customers.find(c => c.id === +custSel.value);
+        const amount = () => Math.round(curItem().unit_price_cents * +durSel.value / 60);
+        const fillDur = () => {
+          durSel.innerHTML = durOpts(curItem()).map(d =>
+            `<option value="${d}" ${d === curItem().minutes ? 'selected' : ''}>${d} 分钟</option>`).join('');
+        };
+        const refresh = () => {
+          amountEl.textContent = '¥' + fmtMoney(amount());
+          const c = curCust();
+          const enough = c.balance_cents >= amount();
+          balanceEl.innerHTML = `顾客余额 ¥${fmtMoney(c.balance_cents)}`
+            + (enough ? '' : ' <b style="color:var(--red)">（余额不足，无法下单）</b>');
+          checkBox.hidden = true;
+        };
+        itemSel.onchange = () => { fillDur(); refresh(); };
+        durSel.onchange = refresh;
+        custSel.onchange = refresh;
+        box.querySelector('#no-check-btn').onclick = async () => {
+          checkBox.hidden = false;
+          checkBox.className = 'info-box';
+          checkBox.textContent = '检查中…';
+          try {
+            const r = await API.call('/api/a/check-conflict'
+              + `?customer_id=${custSel.value}&item_id=${itemSel.value}`
+              + `&date=${box.querySelector('#no-date').value}&time=${box.querySelector('#no-time').value}`
+              + `&duration=${durSel.value}`);
+            if (r.available) {
+              checkBox.innerHTML = `✅ 该时段可预约（金额 ¥${fmtMoney(r.price_cents)}）`;
+            } else {
+              checkBox.className = 'warn-box';
+              checkBox.innerHTML = '⚠ 与服务员已有预约冲突（需间隔30分钟以上）：<br>'
+                + (r.conflicts || []).map(c => `· ${esc(c.sched_start)} ~ ${esc(c.sched_end.slice(11))}`).join('<br>')
+                + ((r.suggestions || []).length ? `<br>建议：${r.suggestions.join(' / ')}` : '');
+            }
+          } catch (e) { checkBox.className = 'warn-box'; checkBox.textContent = e.message; }
+        };
+        fillDur(); refresh();
+      },
       onOk: async () => {
+        const body = {
+          customer_id: +document.getElementById('no-customer').value,
+          item_id: +document.getElementById('no-item').value,
+          duration_minutes: +document.getElementById('no-dur').value,
+          date: document.getElementById('no-date').value,
+          time: document.getElementById('no-time').value,
+          note: document.getElementById('no-note').value.trim(),
+        };
         try {
-          const r = await API.call('/api/a/orders', { method: 'POST', body: {
-            customer_id: +document.getElementById('no-customer').value,
-            item_id: +document.getElementById('no-item').value,
-            date: document.getElementById('no-date').value,
-            time: document.getElementById('no-time').value,
-            note: document.getElementById('no-note').value.trim(),
-          } });
+          await API.call('/api/a/orders', { method: 'POST', body });
           toast('下单成功', true);
-          if (r.conflict_warning) setTimeout(() => toast('注意：该时段与服务员其他预约相近，建议协调'), 700);
           closeModal();
           done();
-        } catch (e) { toast(e.message); }
+        } catch (e) {
+          const d = e.data || {};
+          if (d.conflicts) {
+            if (confirm('该时段与服务员已有预约冲突（需间隔30分钟以上）。\n确定仍要下单吗？')) {
+              try {
+                await API.call('/api/a/orders', { method: 'POST', body: { ...body, force: true } });
+                toast('已强制下单', true);
+                closeModal();
+                done();
+              } catch (e2) { toast(e2.message); }
+            }
+          } else {
+            toast(e.message);
+          }
+        }
         return false;
       },
     });
@@ -394,11 +468,11 @@ const Admin = {
       <div class="card">
         <h3>服务项目 <button class="btn btn-small" id="it-new">➕ 新增</button></h3>
         <div class="tblwrap"><table class="tbl">
-          <tr><th>项目</th><th>时长(分)</th><th>价格</th><th>服务员酬金</th><th>状态</th><th>操作</th></tr>
+          <tr><th>项目</th><th>默认时长(分)</th><th>单价(元/小时)</th><th>服务员酬金(元/默认时长)</th><th>状态</th><th>操作</th></tr>
           ${this.cache.items.map(i => `
             <tr>
               <td>${esc(i.name)}</td><td>${i.minutes}</td>
-              <td>¥${fmtMoney(i.price_cents)}</td><td>¥${fmtMoney(i.worker_pay_cents)}</td>
+              <td>¥${fmtMoney(i.unit_price_cents)}</td><td>¥${fmtMoney(i.worker_pay_cents)}</td>
               <td>${i.active ? '<span class="chip green">在售</span>' : '<span class="chip gray">停用</span>'}</td>
               <td><div class="ops">
                 <button class="btn btn-ghost btn-small" data-it="${i.id}">编辑</button>
@@ -422,22 +496,23 @@ const Admin = {
   },
 
   itemModal(item, done) {
-    const i = item || { name: '', minutes: 60, price_cents: 0, worker_pay_cents: 0 };
+    const i = item || { name: '', minutes: 60, unit_price_cents: 0, worker_pay_cents: 0 };
     openModal(item ? `编辑：${item.name}` : '新增服务项目', `
       <label class="fl">项目名称</label><input type="text" id="if-name" value="${esc(i.name)}">
       <div class="frow">
-        <div><label class="fl">时长（分钟）</label><input type="number" id="if-min" min="10" step="10" value="${i.minutes}"></div>
-        <div><label class="fl">价格（元）</label><input type="number" id="if-price" min="0" step="0.5" value="${fmtMoney(i.price_cents)}"></div>
+        <div><label class="fl">默认时长（分钟）</label><input type="number" id="if-min" min="15" max="480" step="5" value="${i.minutes}"></div>
+        <div><label class="fl">单价（元/小时）</label><input type="number" id="if-price" min="0" step="0.5" value="${fmtMoney(i.unit_price_cents)}"></div>
       </div>
-      <label class="fl">服务员酬金（元）</label>
-      <input type="number" id="if-pay" min="0" step="0.5" value="${fmtMoney(i.worker_pay_cents)}">`, {
+      <label class="fl">服务员酬金（元 / 默认时长）</label>
+      <input type="number" id="if-pay" min="0" step="0.5" value="${fmtMoney(i.worker_pay_cents)}">
+      <div class="muted small" style="margin-top:8px">服务金额 = 单价 × 实际服务时长（小时）；酬金按实际时长等比换算。</div>`, {
       okText: '保存',
       onOk: async () => {
         try {
           const body = {
             name: document.getElementById('if-name').value.trim(),
             minutes: +document.getElementById('if-min').value,
-            price_cents: Math.round(+document.getElementById('if-price').value * 100),
+            unit_price_cents: Math.round(+document.getElementById('if-price').value * 100),
             worker_pay_cents: Math.round(+document.getElementById('if-pay').value * 100),
           };
           if (item) await API.call(`/api/a/items/${item.id}`, { method: 'PUT', body });
