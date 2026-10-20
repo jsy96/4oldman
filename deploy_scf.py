@@ -1,18 +1,15 @@
-"""一键部署到腾讯云函数 SCF（Web 函数），本机直接调 API，无需控制台手点。
-
-前提：
-  1. 已运行 pack_scf.py 生成 scf_bundle.zip
-  2. secrets.json 中已填：
-       tencent_secret_id / tencent_secret_key  —— 访问管理→API密钥管理 创建
-       database_url  —— mysql://账号:密码@内网IP:3306/库名（腾讯云 MySQL）
-       amap_key      —— 可选
+"""全自动部署到腾讯云开发环境（HTTP 云函数），无需打开控制台。
 
 用法：
-  .venv/Scripts/python.exe deploy_scf.py --region ap-guangzhou \
-      [--name eldercare] [--vpc-id vpc-xxx --subnet-id subnet-xxx] [--update-only]
+  .venv/Scripts/python.exe deploy_scf.py            # 自动找环境（唯一环境时）
+  .venv/Scripts/python.exe deploy_scf.py --env 环境ID  # 多环境时指定
+  .venv/Scripts/python.exe deploy_scf.py --list     # 只列出你的环境
 
-流程：函数不存在则创建（含环境变量/VPC/超时/内存），已存在则更新代码与配置；
-最后尝试自动创建 API 网关触发器并打印访问 URL（失败则给出控制台手动路径）。
+前提：secrets.json 已填 tencent_secret_id / tencent_secret_key
+（控制台 → 右上角头像 → 访问管理 → API密钥管理 → 新建密钥）
+
+自动完成：打包 → 查环境 → 在环境内创建/更新 HTTP 云函数（Python3.9, 256MB, 60s）
+→ 建 API 触发器 → 打印访问网址。改代码后重跑即热更新。
 """
 import argparse
 import base64
@@ -21,9 +18,8 @@ import os
 import sys
 
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-
 BASE = os.path.dirname(os.path.abspath(__file__))
-ZIP = os.path.join(BASE, 'scf_bundle.zip')
+REGIONS = ['ap-shanghai', 'ap-guangzhou', 'ap-beijing', 'ap-chengdu', 'ap-nanjing', 'ap-hongkong']
 
 
 def load_secrets():
@@ -31,99 +27,133 @@ def load_secrets():
         return json.load(f)
 
 
+def scf_region(r):
+    return r if r.startswith('ap-') or r.startswith('na-') or r.startswith('eu-') else 'ap-' + r
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--region', required=True, help='地域，如 ap-guangzhou / ap-shanghai')
-    ap.add_argument('--name', default='eldercare', help='函数名，默认 eldercare')
-    ap.add_argument('--vpc-id', default='', help='与 MySQL 同 VPC 的 vpc-xxx（内网连库必填）')
-    ap.add_argument('--subnet-id', default='', help='子网 subnet-xxx')
-    ap.add_argument('--update-only', action='store_true', help='只更新代码与配置，不尝试建触发器')
+    ap.add_argument('--env', default='', help='云开发环境ID（多环境时指定）')
+    ap.add_argument('--name', default='eldercare', help='函数名')
+    ap.add_argument('--list', action='store_true', help='只列出环境')
     args = ap.parse_args()
 
     sec = load_secrets()
     sid, skey = sec.get('tencent_secret_id', ''), sec.get('tencent_secret_key', '')
     if not sid or not skey:
-        sys.exit('[缺配置] 请在 secrets.json 填 tencent_secret_id / tencent_secret_key\n'
-                 '获取：腾讯云控制台 → 右上角头像 → 访问管理 → API密钥管理 → 新建密钥')
-    if not os.path.exists(ZIP):
-        sys.exit('[缺文件] 请先运行: .venv/Scripts/python.exe pack_scf.py')
+        sys.exit('[缺配置] secrets.json 的 tencent_secret_id / tencent_secret_key 还没填。\n'
+                 '获取：控制台 → 右上角头像 → 访问管理 → API密钥管理 → 新建密钥 → 填入 secrets.json（别发聊天）')
 
     from tencentcloud.common import credential
     from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentCloudSDKException
-    from tencentcloud.scf.v20180416 import scf_client, models
+    from tencentcloud.tcb.v20180608 import tcb_client, models as tcbm
+    from tencentcloud.scf.v20180416 import scf_client, models as scfm
 
     cred = credential.Credential(sid, skey)
-    client = scf_client.ScfClient(cred, args.region)
-    env_vars = [models.Variable(Key=k, Value=v) for k, v in {
-        'DATABASE_URL': sec.get('database_url', ''),
-        'AMAP_KEY': sec.get('amap_key', ''),
-    }.items() if v]
+
+    # 1. 查环境
+    envs = []
+    for region in REGIONS:
+        try:
+            c = tcb_client.TcbClient(cred, region)
+            req = tcbm.DescribeEnvsRequest()
+            req.Limit = 100
+            resp = c.DescribeEnvs(req)
+            for e in resp.EnvList or []:
+                envs.append(dict(id=e.EnvId, alias=e.Alias, region=e.Region or region,
+                                 status=e.Status, package=e.PackageName))
+        except TencentCloudSDKException as e:
+            if 'UnauthorizedOperation' not in e.code:
+                pass  # 无环境的地域忽略
+    if not envs:
+        sys.exit('没找到任何云开发环境：请确认密钥正确、账号下确实有云开发环境')
+    print('找到环境：')
+    for e in envs:
+        print(f"  {e['id']}  ({e['alias']})  地域 {e['region']}  状态 {e['status']}")
+    if args.list:
+        return
+    if args.env:
+        env = next((e for e in envs if e['id'] == args.env), None)
+        if not env:
+            sys.exit(f'指定的环境 {args.env} 不存在（用 --list 查看）')
+    elif len(envs) == 1:
+        env = envs[0]
+    else:
+        cand = [e for e in envs if 'ajmj' in e['id'].lower()]
+        if len(cand) == 1:
+            env = cand[0]
+            print(f"自动选择 ajmj 环境：{env['id']}")
+        else:
+            sys.exit('有多个环境，请用 --env 指定其一（上面已列出）')
+    region = scf_region(env['region'])
+    print(f'目标：环境 {env["id"]} @ {region}，函数 {args.name}')
+
+    # 2. 打包
+    sys.path.insert(0, BASE)
+    import pack_fn
+    pack_fn.main()
+    code_b64 = base64.b64encode(open(os.path.join(BASE, 'cloudbase_fn.zip'), 'rb').read()).decode()
+
+    # 3. 建函数或更新
+    client = scf_client.ScfClient(cred, region)
+    client.set_stream_logger(stream=sys.stderr, log_level='ERROR')
 
     def exists():
         try:
-            req = models.GetFunctionRequest()
+            req = scfm.GetFunctionRequest()
             req.FunctionName = args.name
+            req.Namespace = env['id']
             client.GetFunction(req)
             return True
         except TencentCloudSDKException:
             return False
 
     if exists():
-        print(f'函数 {args.name} 已存在 → 更新代码 ...')
-        req = models.UpdateFunctionCodeRequest()
-        req.FunctionName = args.name
-        req.ZipFile = base64.b64encode(open(ZIP, 'rb').read()).decode()
+        print('函数已存在 → 更新代码与配置 ...')
+        req = scfm.UpdateFunctionCodeRequest()
+        req.FunctionName, req.Namespace, req.ZipFile = args.name, env['id'], code_b64
         client.UpdateFunctionCode(req)
-        cfg = models.UpdateFunctionConfigurationRequest()
-        cfg.FunctionName = args.name
-        cfg.Environment = models.Environment(Variables=env_vars)
-        if args.vpc_id and args.subnet_id:
-            cfg.VpcConfig = models.VpcConfig(VpcId=args.vpc_id, SubnetId=args.subnet_id)
+        cfg = scfm.UpdateFunctionConfigurationRequest()
+        cfg.FunctionName, cfg.Namespace = args.name, env['id']
+        cfg.Timeout, cfg.MemorySize = 60, 256
         client.UpdateFunctionConfiguration(cfg)
-        print('代码与配置已更新')
     else:
-        print(f'创建函数 {args.name}（Web 函数, Python3.9）...')
-        req = models.CreateFunctionRequest()
+        print('创建 HTTP 云函数 ...')
+        req = scfm.CreateFunctionRequest()
         req.FunctionName = args.name
+        req.Namespace = env['id']
         req.Type = 'HTTP'
         req.Runtime = 'Python3.9'
-        req.Handler = 'server.app'
         req.Timeout = 60
         req.MemorySize = 256
-        req.Code = models.Code(ZipFile=base64.b64encode(open(ZIP, 'rb').read()).decode())
-        req.Environment = models.Environment(Variables=env_vars)
-        if args.vpc_id and args.subnet_id:
-            req.VpcConfig = models.VpcConfig(VpcId=args.vpc_id, SubnetId=args.subnet_id)
+        req.Code = scfm.Code(ZipFile=code_b64)
         try:
             client.CreateFunction(req)
         except TencentCloudSDKException as e:
-            sys.exit(f'[创建失败] {e}\n'
-                     '常见原因：Runtime 不支持（错误信息会列出可选值，改 deploy_scf.py 里 req.Runtime）、\n'
-                     '地域无 Python3.9、或函数名已存在。')
-        print('函数创建成功')
+            sys.exit(f'[创建失败] {e}\n若提示函数名已存在但查询不到（上次失败残留），'
+                     f'去控制台删掉 {args.name} 再重跑本脚本。')
+    print('函数代码已就位')
 
-    if args.update_only:
-        print('\n完成。请在控制台查看/测试函数。')
-        return
-
-    # 尽力自动创建 API 网关触发器（格式随平台版本可能有差异，失败不影响函数本身）
+    # 4. 触发器（尽力而为）
     try:
-        req = models.CreateTriggerRequest()
-        req.FunctionName = args.name
-        req.TriggerName = 'http'
-        req.Type = 'apigw'
+        req = scfm.CreateTriggerRequest()
+        req.FunctionName, req.Namespace = args.name, env['id']
+        req.TriggerName, req.Type = 'http', 'apigw'
         req.TriggerDesc = json.dumps({
-            'api': {'authRequired': 'FALSE', 'requestConfig': {'method': 'ANY'},
-                    'isIntegratedResponse': 'FALSE'},
-            'service': {'path': '/'},
+            'api': {'authRequired': 'FALSE', 'requestConfig': {'method': 'ANY'}},
+            'service': {'path': '/' + args.name},
         })
-        resp = client.CreateTrigger(req)
-        print('触发器创建成功：', getattr(resp, 'TriggerInfo', None))
+        client.CreateTrigger(req)
+        print('触发器创建成功')
     except TencentCloudSDKException as e:
-        print(f'[触发器] 自动创建未成功（{e.message}）。\n'
-              f'→ 控制台：云函数 {args.name} → 触发管理 → 创建触发器（API网关，免鉴权，路径 /）')
+        print(f'[触发器] 自动创建未成功（{e.message}），不影响函数；可稍后在控制台开启 HTTP 访问')
 
-    print('\n最后一步：打开函数的 API 网关 URL 即可访问（首次冷启动 2-5 秒）。')
+    print(f'''
+完成！访问网址（其一可用）：
+  https://{env['id']}.{region}.tcb.qcloud.la/{args.name}
+  （或控制台 → 云函数 {args.name} → HTTP访问/云接入 里的地址）
+
+首次访问约 3-10 秒（连库建表+演示数据），之后秒开。部署完用浏览器打开验证。''')
 
 
 if __name__ == '__main__':

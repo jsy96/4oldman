@@ -1,0 +1,6 @@
+#!/bin/bash
+# SCF/TCB HTTP 云函数启动脚本（平台要求：zip 根目录、可执行权限）
+export PYTHONUNBUFFERED=1
+PY=/var/lang/python3/bin/python3
+[ -x "$PY" ] || PY=python3
+exec $PY server.py

@@ -271,10 +271,14 @@ def init_db(app):
         conn.execute('PRAGMA foreign_keys=ON')
         db = DB(conn, 'sqlite')
         _run_script(db, SCHEMA_SQLITE)
-    if db.execute('SELECT COUNT(*) AS c FROM users').fetchone()['c'] == 0:
-        seed(db)
-    db.commit()
-    conn.close()
+    try:
+        if db.execute('SELECT COUNT(*) AS c FROM users').fetchone()['c'] == 0:
+            seed(db)
+        db.commit()
+    except Exception:
+        db.rollback()
+        conn.close()
+        raise
 
 
 def seed(db):

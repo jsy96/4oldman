@@ -18,7 +18,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 BUILD = os.path.join(BASE, 'build_fn')
 ZIP = os.path.join(BASE, 'cloudbase_fn.zip')
 INCLUDE = ['index.py', 'careapp', 'web', 'server.py', 'config.json',
-           'requirements.txt', 'secrets.json']
+           'requirements.txt', 'secrets.json', 'scf_bootstrap']
 
 
 def main():
@@ -54,7 +54,16 @@ def main():
                 if f.endswith(('.pyc', '.db')):
                     continue
                 full = os.path.join(root, f)
-                z.write(full, os.path.relpath(full, BUILD))
+                arc = os.path.relpath(full, BUILD)
+                if f == 'scf_bootstrap':
+                    # 平台要求可执行权限；并强制 LF 行尾（Windows 的 CRLF 会导致 bash 报错）
+                    data = open(full, 'rb').read().replace(b'\r\n', b'\n')
+                    zi = zipfile.ZipInfo('scf_bootstrap')
+                    zi.external_attr = 0o100755 << 16
+                    zi.compress_type = zipfile.ZIP_DEFLATED
+                    z.writestr(zi, data)
+                else:
+                    z.write(full, arc)
     print(f'完成：{ZIP}（{os.path.getsize(ZIP) / 1024:.0f} KB）')
     print('→ 云开发 → 云函数 → 新建（Python3.9，空白函数）→ 代码页上传本 zip')
     print('→ 入口 index.main_handler，内存 256MB，超时 60 秒')
